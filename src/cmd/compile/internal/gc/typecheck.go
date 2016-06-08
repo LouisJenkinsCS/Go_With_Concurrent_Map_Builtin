@@ -1790,6 +1790,25 @@ OpSwitch:
 			} else {
 				n.Left = Nodintconst(0)
 			}
+
+			// L.J: Code added for 3rd parameter, 'mode'
+			if i < len(args) {
+				right := args[i]
+				i++
+				right = typecheck(right, Erv)
+				right = defaultlit(right, Types[TINT])
+				if right.Type == nil {
+					n.Type = nil
+					return n
+				}
+				if !checkmake(t, "mode", right) {
+					n.Type = nil
+					return n
+				}
+				n.Right = right
+			} else {
+				n.Right = Nodintconst(0)
+			}
 			n.Op = OMAKEMAP
 
 		case TCHAN:

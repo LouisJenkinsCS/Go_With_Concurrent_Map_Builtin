@@ -442,6 +442,21 @@ func Nodconst(n *Node, t *Type, v int64) {
 	}
 }
 
+/*
+	L.J:
+		Convenience to create a constant string
+*/
+func Nodstrconst(str string) *Node {
+	n := Nod(OLITERAL, nil, nil)
+	n.Addable = true
+	n.SetVal(Val{string})
+
+	// Why is it IDEAL? Why not just TSTRING?
+	n.Type = Types[TIDEAL]
+	ullmancalc(n)
+	return n
+}
+
 func nodnil() *Node {
 	c := Nodintconst(0)
 	c.SetVal(Val{new(NilVal)})

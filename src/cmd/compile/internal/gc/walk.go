@@ -1257,6 +1257,55 @@ opswitch:
 		n.Type = t.Val()
 		n.Typecheck = 1
 
+		/*
+			L.J:
+				
+				For Cause-Effect based logging; since the compiler turns map indexing into a function call, it is
+			useful to log where and how it does so here for later when I modify the map.
+
+			if (h.flags & logCauseEffect) != 0 {
+				println("Compiler turned ", n, " into ", p)
+			}
+
+			Add this to Ninit so it can be done before the above
+
+			Some things to remember...
+
+			The hashmap is always the left node for OINDEXMAP, as it goes Left[Right]
+
+			hmap is of type TSTRUCT, and it's flags field is the 2nd (statically). The Symbol in the symbol table is kept in
+			the struct's Field's Sym field. This is needed to obtain the field from flag, referred to as ODOT, syntatically
+			represented as Left.Sym.
+
+			From a syntax tree perspective, OIF is structured as: if Ninit; Left { Nbody } else { Rlist }, hence
+			while we do need Ninit, Left is the conditional with Nbody being the statements to be run.
+		*/
+		hmap := n.Left
+		flagsSym := hmap.Type.Fields().Slice()[1].Sym
+		// h.flags
+		hFlags := NodSym(ODOT, hmap, flagsSym)
+		// logCauseEffect
+		bit := Nodintconst(1 << 4)
+		// h.flags & logCauseEffect
+		bitSet := Nod(OAND, hFlags, bit)
+		// (h.flags & logCauseEffect) != 0
+		wasSet := Nod(ONE, bitSet, Nodintconst(0))
+		// if (h.flags & logCauseEffect) != 0
+		ifStmnt := Nod(OIF, wasSet, nil)
+
+		// println("Compiler turned ", n, " into ", p)
+		printStmnt := Nod(OPRINTN, nil, nil)
+		printStmnt.List.Append(Nodstrconst("Compiler turned "))
+		printStmnt.List.Append(Nodstrconst(n.String()))
+		printStmnt.List.Append(Nodstrconst(" into "))
+		printStmnt.List.Append(Nodstrconst(p))
+
+		// if (h.flags & logCauseEffect) != 0 { println("Compiler turned ", n, " into ", p) }
+		ifStmnt.Nbody.Append(printStmnt)
+
+		// Add to Ninit
+		init.Append(ifStmnt)
+
 	case ORECV:
 		Fatalf("walkexpr ORECV") // should see inside OAS only
 
@@ -1414,9 +1463,16 @@ opswitch:
 			r = Nod(OADDR, var_, nil)
 		}
 
+		debug := false
+
+		// L.J: Only change in code
+		if n.Right != nil && n.Right.Int64() != 0 {
+			debug = true
+		}
+
 		fn := syslook("makemap")
 		fn = substArgTypes(fn, hmap(t), mapbucket(t), t.Key(), t.Val())
-		n = mkcall1(fn, n.Type, init, typename(n.Type), conv(n.Left, Types[TINT64]), a, r)
+		n = mkcall1(fn, n.Type, init, typename(n.Type), conv(n.Left, Types[TINT64]), a, r, Nodbool(debug))
 
 	case OMAKESLICE:
 		l := n.Left
