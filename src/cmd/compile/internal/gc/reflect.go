@@ -287,7 +287,7 @@ func bucketHdr(t *Type) *Type {
 
 	var field [3]*Field
 	field[0] = makefield("bucket", Types[TUNSAFEPTR])
-	field[1] = makefield("flags", Types[TUINT8])
+	field[1] = makefield("flags", Types[TUINT32])
 	// TODO: Find a way to set type to 'g'
 	field[2] = makefield("g", Types[TUNSAFEPTR])
 
@@ -306,8 +306,9 @@ func bucketArray(t *Type) *Type {
 		return t.MapType().BucketArray
 	}
 
-	var field [1]*Field
+	var field [2]*Field
 	field[0] = makefield("data", Ptrto(bucketHdr(t)))
+	field[1] = makefield("seed", Types[TUINT32])
 
 	barr := typ(TSTRUCT)
 	barr.Noalg = true

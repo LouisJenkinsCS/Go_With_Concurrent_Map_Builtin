@@ -369,7 +369,7 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrent 
 // hold onto it for very long.
 func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
+		return cmapaccess1(t, h, key)
 	}
 
 	if raceenabled && h != nil {
@@ -427,7 +427,7 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 
 func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
 	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
+		return cmapaccess2(t, h, key)
 	}
 
 	if raceenabled && h != nil {
