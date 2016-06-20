@@ -350,6 +350,12 @@ type maptype struct {
 	bucketsize    uint16 // size of bucket
 	reflexivekey  bool   // true if k==k for all keys
 	needkeyupdate bool   // true if we need to update key on an overwrite
+
+	// L.J: Concurrent Map
+	concurrentmap *_type
+	bucketarray *_type
+	bucketchain *_type
+	buckethdr *_type
 }
 
 type arraytype struct {

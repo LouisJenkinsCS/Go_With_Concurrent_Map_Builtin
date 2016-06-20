@@ -57,7 +57,6 @@ import (
 	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
-	"io"
 )
 
 const (
@@ -97,7 +96,7 @@ const (
 	iterator    = 1 // there may be an iterator using buckets
 	oldIterator = 2 // there may be an iterator using oldbuckets
 	hashWriting = 4 // a goroutine is writing to the map
-	logEntrance = 8 // L.J: Inserted to log entrances in the function
+	concurrent = 8 // L.J: Inserted to notify this is a concurrent map
 
 	// sentinel bucket ID for iterator checks
 	noCheck = 1<<(8*sys.PtrSize) - 1
@@ -126,6 +125,9 @@ type hmap struct {
 	// The first indirection allows us to reduce static size of hmap.
 	// The second indirection allows to store a pointer to the slice in hiter.
 	overflow *[2]*[]*bmap
+
+	// L.J: Inserted header for concurrent map
+	chdr unsafe.Pointer
 }
 
 // A bucket for a Go map.
@@ -158,91 +160,91 @@ type hiter struct {
 	checkBucket uintptr
 }
 
-/*
-	L.J:
-		Our function, used to debug and print the trace of callers when logEntrance is enabled. It simply
-		prints out the call stack, information including the depth, the file, function and line number it
-		is called from.
-*/
-func printDebugInfo() {
-	// As Caller(0) would just get printDebugInfo(), we must skip one stack frame at least
-	idx := 1
+// /*
+// 	L.J:
+// 		Our function, used to debug and print the trace of callers when concurrent is enabled. It simply
+// 		prints out the call stack, information including the depth, the file, function and line number it
+// 		is called from.
+// */
+// func println("Concurrent Access Provided!") {
+// 	// As Caller(0) would just get println("Concurrent Access Provided!"), we must skip one stack frame at least
+// 	idx := 1
 
-	println("Stack Trace:\n{")
+// 	println("Stack Trace:\n{")
 
-	// We continuously climb the callstack until the end by printing out the enxt caller.
-	for {
-		// Obtain the program counter, file and line number from Caller
-		pc, file, line, ok := Caller(idx)
-		if !ok {
-			// We need at LEAST 2, the the function calling printDebugInfo(), and the caller of that function
-			if idx < 3 {
-				println("Failed to get the caller and the callee!")
-				throw("Failed Debug")
-			} else {
-				break
-			}
-		}
+// 	// We continuously climb the callstack until the end by printing out the enxt caller.
+// 	for {
+// 		// Obtain the program counter, file and line number from Caller
+// 		pc, file, line, ok := Caller(idx)
+// 		if !ok {
+// 			// We need at LEAST 2, the the function calling println("Concurrent Access Provided!"), and the caller of that function
+// 			if idx < 3 {
+// 				println("Failed to get the caller and the callee!")
+// 				throw("Failed Debug")
+// 			} else {
+// 				break
+// 			}
+// 		}
 
-		// Given the PC, we can obtain the function it refers to.
-		fn := FuncForPC(pc)
-		if fn == nil {
-			println("Failed to retrieve the function from the Program Counter returned from Caller #", idx)
-			throw("Failed Debug")
-		}
+// 		// Given the PC, we can obtain the function it refers to.
+// 		fn := FuncForPC(pc)
+// 		if fn == nil {
+// 			println("Failed to retrieve the function from the Program Counter returned from Caller #", idx)
+// 			throw("Failed Debug")
+// 		}
 
-		// Strip the path off of the file
-		for fileIdx := 0; len(file) > 0 && fileIdx != -1; file = file[fileIdx + 1 : ] { 
-			fileIdx = index(file, "/")
-		}
+// 		// Strip the path off of the file
+// 		for fileIdx := 0; len(file) > 0 && fileIdx != -1; file = file[fileIdx + 1 : ] { 
+// 			fileIdx = index(file, "/")
+// 		}
 
-		// proc.go is normally invoked to kickstart our program, so we don't care about that, stop here
-		if file == "proc.go" {
-			break;
-		}
+// 		// proc.go is normally invoked to kickstart our program, so we don't care about that, stop here
+// 		if file == "proc.go" {
+// 			break;
+// 		}
 
-		// Print the relevant debug information.
-		print("\t#", idx, ": { File: ", file, "; Func:", fn.Name(), "(")
+// 		// Print the relevant debug information.
+// 		print("\t#", idx, ": { File: ", file, "; Func:", fn.Name(), "(")
 
-		// rawFn := fn.raw()
-		// for offset := rawFn.entry + rawFn.args - sys.PtrSize; offset != rawFn.
+// 		// rawFn := fn.raw()
+// 		// for offset := rawFn.entry + rawFn.args - sys.PtrSize; offset != rawFn.
 
-		println("); Line: ", line, "; }")
-		idx++
-	}
+// 		println("); Line: ", line, "; }")
+// 		idx++
+// 	}
 
-	println("}\nEnd Stack Trace...")
-}
+// 	println("}\nEnd Stack Trace...")
+// }
 
-/*
-	L.J:
-		This is used to explicitly determine the syntax needed to produce this. Pretty much
-		it helps distinguish what the compiler replaces certain calls with.
-*/
-func printCauseEffectInfo() {
-	// The function that called printCauseEffectInfo()
-	pc, file, line, ok := Caller(1);
-	if !ok {
-		println("Failed to get the caller!")
-		throw("Failed Debug")
-	}
+// /*
+// 	L.J:
+// 		This is used to explicitly determine the syntax needed to produce this. Pretty much
+// 		it helps distinguish what the compiler replaces certain calls with.
+// */
+// func printCauseEffectInfo() {
+// 	// The function that called printCauseEffectInfo()
+// 	pc, file, line, ok := Caller(1);
+// 	if !ok {
+// 		println("Failed to get the caller!")
+// 		throw("Failed Debug")
+// 	}
 
-	fn := FuncForPC(pc)
-	if fn == nil {
-		println("Failed to retrieve the function from the Program Counter returned from Caller")
-		throw("Failed Debug")
-	}
+// 	fn := FuncForPC(pc)
+// 	if fn == nil {
+// 		println("Failed to retrieve the function from the Program Counter returned from Caller")
+// 		throw("Failed Debug")
+// 	}
 
-	callerName := fn.Name()
+// 	callerName := fn.Name()
 
-	pc, file, line, ok := Caller(2);
-	if !ok {
-		println("Failed to get the second caller!")
-		throw("Failed Debug")
-	}
+// 	pc, file, line, ok = Caller(2);
+// 	if !ok {
+// 		println("Failed to get the second caller!")
+// 		throw("Failed Debug")
+// 	}
 
 
-}
+// }
 
 func evacuated(b *bmap) bool {
 	h := b.tophash[0]
@@ -275,9 +277,8 @@ func (h *hmap) createOverflow() {
 // can be created on the stack, h and/or bucket may be non-nil.
 // If h != nil, the map can be created directly in h.
 // If bucket != nil, bucket can be used as the first bucket.
-func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, debug bool) *hmap {
-	// println("t: ", t, ";hint: ", hint, ";h: ", h, ";bucket: ", bucket, ";debug: ", debug)
-	if sz := unsafe.Sizeof(hmap{}); sz > 48 || sz != t.hmap.size {
+func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrent bool) *hmap {
+	if sz := unsafe.Sizeof(hmap{}); sz > 56 || sz != t.hmap.size {
 		println("runtime: sizeof(hmap) =", sz, ", t.hmap.size =", t.hmap.size)
 		throw("bad hmap size")
 	}
@@ -299,6 +300,14 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, debug bool)
 	if t.elem.size > maxValueSize && (!t.indirectvalue || t.valuesize != uint8(sys.PtrSize)) ||
 		t.elem.size <= maxValueSize && (t.indirectvalue || t.valuesize != uint8(t.elem.size)) {
 		throw("value size wrong")
+	}
+
+	/*
+		Our injected case. Without modifying the map, or adding much overhead, we explicitly
+		pass our CMAP 
+	*/
+	if concurrent {
+		return makecmap(t, hint, h, bucket)
 	}
 
 	// invariants we depend on. We should probably check these at compile time
@@ -350,11 +359,6 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, debug bool)
 	h.oldbuckets = nil
 	h.nevacuate = 0
 
-	// L.J: Our inserted code.
-	if debug {
-		h.flags = logEntrance
-	}
-
 	return h
 }
 
@@ -364,8 +368,8 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, debug bool)
 // NOTE: The returned pointer may keep the whole map live, so don't
 // hold onto it for very long.
 func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	if raceenabled && h != nil {
@@ -422,8 +426,8 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 }
 
 func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	if raceenabled && h != nil {
@@ -481,8 +485,8 @@ func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) 
 
 // returns both key and value. Used by map iterator
 func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe.Pointer) {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	if h == nil || h.count == 0 {
@@ -530,8 +534,8 @@ func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe
 }
 
 func mapaccess1_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) unsafe.Pointer {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	v := mapaccess1(t, h, key)
@@ -542,8 +546,8 @@ func mapaccess1_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) unsafe.Pointe
 }
 
 func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Pointer, bool) {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	v := mapaccess1(t, h, key)
@@ -554,8 +558,8 @@ func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Point
 }
 
 func mapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	if h == nil {
@@ -674,8 +678,8 @@ done:
 }
 
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	if raceenabled && h != nil {
@@ -740,8 +744,8 @@ done:
 }
 
 func mapiterinit(t *maptype, h *hmap, it *hiter) {
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	// Clear pointer fields so garbage collector does not complain.
@@ -807,8 +811,8 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 
 func mapiternext(it *hiter) {
 	h := it.h
-	if (h.flags & logEntrance) != 0 {
-		printDebugInfo()
+	if (h.flags & concurrent) != 0 {
+		throw("Concurrent Access Provided!")
 	}
 
 	if raceenabled {

@@ -176,7 +176,7 @@ func hmap(t *Type) *Type {
 	}
 
 	bucket := mapbucket(t)
-	var field [8]*Field
+	var field [9]*Field
 	field[0] = makefield("count", Types[TINT])
 	field[1] = makefield("flags", Types[TUINT8])
 	field[2] = makefield("B", Types[TUINT8])
@@ -185,6 +185,8 @@ func hmap(t *Type) *Type {
 	field[5] = makefield("oldbuckets", Ptrto(bucket))
 	field[6] = makefield("nevacuate", Types[TUINTPTR])
 	field[7] = makefield("overflow", Types[TUNSAFEPTR])
+	// L.J: Inserted unsafe.Pointer to be used in case it is Concurrent.
+	field[8] = makefield("chdr", Ptrto(concurrentMap(t)))
 
 	h := typ(TSTRUCT)
 	h.Noalg = true
@@ -242,6 +244,101 @@ func hiter(t *Type) *Type {
 	t.MapType().Hiter = i
 	i.StructType().Map = t
 	return i
+}
+
+func bucketChain(t *Type) *Type {
+	if t.MapType().BucketChain != nil {
+		return t.MapType().BucketChain
+	}
+
+	keytype := t.Key()
+	valtype := t.Val()
+	dowidth(keytype)
+	dowidth(valtype)
+
+	// If the key or value size is greater than the maximum key/val size, we take it by reference.
+	if keytype.Width > MAXKEYSIZE {
+		keytype = Ptrto(keytype)
+	}
+	if valtype.Width > MAXVALSIZE {
+		valtype = Ptrto(valtype)
+	}
+
+	bchain := typ(TSTRUCT)
+	bchain.Noalg = true
+	
+	var field [3]*Field
+	field[0] = makefield("next", Ptrto(bchain))
+	field[1] = makefield("key", keytype)
+	field[2] = makefield("val", valtype)
+	
+	bchain.SetFields(field[:])
+	dowidth(bchain)
+	t.MapType().BucketChain = bchain
+	bchain.StructType().Map = t
+
+	return bchain
+}
+
+func bucketHdr(t *Type) *Type {
+	if t.MapType().BucketHdr != nil {
+		return t.MapType().BucketHdr
+	}
+
+	var field [3]*Field
+	field[0] = makefield("bucket", Types[TUNSAFEPTR])
+	field[1] = makefield("flags", Types[TUINT8])
+	// TODO: Find a way to set type to 'g'
+	field[2] = makefield("g", Types[TUNSAFEPTR])
+
+	bhdr := typ(TSTRUCT)
+	bhdr.Noalg = true
+	bhdr.SetFields(field[:])
+	dowidth(bhdr)
+	t.MapType().BucketHdr = bhdr
+	bhdr.StructType().Map = t
+
+	return bhdr
+}
+
+func bucketArray(t *Type) *Type {
+	if t.MapType().BucketArray != nil {
+		return t.MapType().BucketArray
+	}
+
+	var field [1]*Field
+	field[0] = makefield("data", Ptrto(bucketHdr(t)))
+
+	barr := typ(TSTRUCT)
+	barr.Noalg = true
+	barr.SetFields(field[:])
+	dowidth(barr)
+	t.MapType().BucketArray = barr
+	barr.StructType().Map = t
+
+	return barr
+}
+
+/*
+	L.J:
+		concurrentMap is the header necessary for the concurrentMap to be created in the runtime.
+*/
+func concurrentMap(t *Type) *Type {
+	if t.MapType().ConcurrentMap != nil {
+		return t.MapType().ConcurrentMap;
+	} 
+
+	var field [1]*Field
+	field[0] = makefield("root", bucketArray(t))
+
+	cmap := typ(TSTRUCT)
+	cmap.Noalg = true
+	cmap.SetFields(field[:])
+	dowidth(cmap)
+	t.MapType().ConcurrentMap = cmap
+	cmap.StructType().Map = t
+
+	return cmap
 }
 
 // f is method type, with receiver.
@@ -1239,6 +1336,13 @@ ok:
 		s2 := dtypesym(t.Val())
 		s3 := dtypesym(mapbucket(t))
 		s4 := dtypesym(hmap(t))
+
+		// Concurrent types
+		s5 := dtypesym(concurrentMap(t))
+		s6 := dtypesym(bucketArray(t))
+		s7 := dtypesym(bucketChain(t))
+		s8 := dtypesym(bucketHdr(t))
+
 		ot = dcommontype(s, ot, t)
 		ot = dsymptr(s, ot, s1, 0)
 		ot = dsymptr(s, ot, s2, 0)
@@ -1263,6 +1367,13 @@ ok:
 		ot = duint16(s, ot, uint16(mapbucket(t).Width))
 		ot = duint8(s, ot, uint8(obj.Bool2int(isreflexive(t.Key()))))
 		ot = duint8(s, ot, uint8(obj.Bool2int(needkeyupdate(t.Key()))))
+
+		// Concurrent encoding
+		ot = dsymptr(s, ot, s5, 0)
+		ot = dsymptr(s, ot, s6, 0)
+		ot = dsymptr(s, ot, s7, 0)
+		ot = dsymptr(s, ot, s8, 0)
+
 		ot = dextratype(s, ot, t, 0)
 
 	case TPTR32, TPTR64:

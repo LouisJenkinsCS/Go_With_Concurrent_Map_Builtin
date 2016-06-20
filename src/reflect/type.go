@@ -384,6 +384,12 @@ type mapType struct {
 	bucketsize    uint16 // size of bucket
 	reflexivekey  bool   // true if k==k for all keys
 	needkeyupdate bool   // true if we need to update key on an overwrite
+
+	// L.J: Concurrent Map
+	concurrentmap *rtype
+	bucketarray *rtype
+	bucketchain *rtype
+	buckethdr *rtype
 }
 
 // ptrType represents a pointer type.

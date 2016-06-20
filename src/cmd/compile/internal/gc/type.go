@@ -168,6 +168,11 @@ type MapType struct {
 	Bucket *Type // internal struct type representing a hash bucket
 	Hmap   *Type // internal struct type representing the Hmap (map header object)
 	Hiter  *Type // internal struct type representing hash iterator state
+
+	ConcurrentMap *Type // internal struct type representing a concurrent map (optional)
+	BucketArray *Type // internal struct type representing a concurrent map bucketArray (optional)
+	BucketChain *Type // internal struct type representing a concurrent map bucketChain (optional)
+	BucketHdr *Type // internal struct type representing a concurrent map bucketHdr (optional)
 }
 
 // MapType returns t's extra map-specific fields.
@@ -988,6 +993,7 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 		// by the general code after the switch.
 
 	case TSTRUCT:
+		// TODO: Throw a compiler error if it attempts to compare a concurrent and non-concurrent map
 		if t.StructType().Map == nil {
 			if x.StructType().Map != nil {
 				return ssa.CMPlt // nil < non-nil

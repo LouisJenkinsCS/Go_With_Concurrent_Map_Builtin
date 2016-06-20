@@ -449,10 +449,8 @@ func Nodconst(n *Node, t *Type, v int64) {
 func Nodstrconst(str string) *Node {
 	n := Nod(OLITERAL, nil, nil)
 	n.Addable = true
-	n.SetVal(Val{string})
-
-	// Why is it IDEAL? Why not just TSTRING?
-	n.Type = Types[TIDEAL]
+	n.SetVal(Val{str})
+	n.Type = Types[TSTRING]
 	ullmancalc(n)
 	return n
 }
