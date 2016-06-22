@@ -286,7 +286,7 @@ func bucketHdr(t *Type) *Type {
 		return t.MapType().BucketHdr
 	}
 
-	var field [3]*Field
+	var field [2]*Field
 	field[0] = makefield("bucket", Types[TUNSAFEPTR])
 	field[1] = makefield("info", Types[TUINTPTR])
 

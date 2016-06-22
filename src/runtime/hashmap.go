@@ -559,7 +559,8 @@ func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Point
 
 func mapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
+		cmapassign1(t, h, key, val)
+		return
 	}
 
 	if h == nil {
