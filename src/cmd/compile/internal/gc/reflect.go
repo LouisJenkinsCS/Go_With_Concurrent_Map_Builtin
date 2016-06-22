@@ -306,7 +306,7 @@ func bucketArray(t *Type) *Type {
 	}
 
 	var field [2]*Field
-	field[0] = makefield("data", Ptrto(bucketHdr(t)))
+	field[0] = makefield("data", typArray(bucketHdr(t), 16))
 	field[1] = makefield("seed", Types[TUINT32])
 
 	barr := typ(TSTRUCT)
