@@ -29,38 +29,17 @@ type bucketHdr struct {
     // Is either a bucketArray or bucketChain
     bucket unsafe.Pointer
     /*
-        Flags:
-            0 : Unlocked and Chained (b.(*bucketChain))
-            1 : Unlocked (always) and Array (b.(*bucketArray))
-            2 : Locked and Chained (always)
-                - CAS Spin on the lock to obtain
-                - Check if is chained, if so, proceed, else unlock and recurse
+        The least significant 3 bits are used as flags and the rest
+        are a pointer to the current 'g' that holds the lock. The 'g' is
+        used to allow it to become reentrant.
+
+        Checking the lock can be as easy as masking out the first three bits.
+        An overall CAS can also make it easier to tell when it is no longer locked,
+        as as soon as the 'g' holding the lock finishes, it will zero the portion
+        used to store the address. This can cause the CAS to fail during a spin
+        and be used to detect if manages to acquire the lock.
     */
-    flags uint32
-
-    /*
-        Pointer to the 'g' (Goroutine) that currently acquired this lock. It can be noted that it's atomicstatus can
-        determine if it is currently running or not, allowing for more fine-grained spinning.
-
-        I.E:
-
-        for {
-            if isLocked(b) {
-                g := (*g) atomic.Load(&b.g)
-                
-                if g == nil {
-                    // The current g has changed, attempt to acquire lock again...
-                }
-
-                if atomic.Or8(g.atomicstatus, _Grunnable) != 0 {
-                    // Back-off and continue spin
-                } else {
-                    // It is currently runnable, so just spin as it may finish within our time slice.
-                }
-            }
-        }
-    */
-    g *g 
+    info uintptr
 }
 
 type bucketArray struct {
@@ -76,14 +55,36 @@ type bucketArray struct {
 */
 type bucketChain struct {
     next *bucketChain
-    // TODO: Find a way to compete with original hashmap's reduction in padding.
-    key unsafe.Pointer
-    val unsafe.Pointer
+    flags uintptr
+    /*
+        Two extra fields can be accessed through the use of unsafe.Pointer, needed because we take
+        each key and value by value, (if it is a indirectKey, then we just store the pointer).
+        Hence, immediately following next, is each key and value
+    */
 }
 
 type concurrentMap struct {
     // Embedded to be contiguous in memory
     root bucketArray
+}
+
+func (chain *bucketChain) key(t *maptype) unsafe.Pointer {
+    // Cast chain to an unsafe.Pointer to bypass Go's type system
+    rawChain := unsafe.Pointer(chain)
+    // The key offset is right at the end of the bucketChain
+    keyOffset := uintptr(rawChain) + unsafe.SizeOf(chain)
+    return unsafe.Pointer(keyOffset)
+}
+
+func (chain *bucketChain) value(t *maptype) unsafe.Pointer {
+    // Cast chain to an unsafe.Pointer to bypass Go's type system
+    rawChain := unsafe.Pointer(chain)
+    // The key offset is right at the end of the bucketChain
+    keyOffset := uintptr(rawChain) + unsafe.Sizeof(chain)
+    // The value offset is right after the end of the key (The size of the key is kept in maptype)
+    valOffset := keyOffset + uintptr(t.keysize)
+
+    return unsafe.Pointer(valOffset)
 }
 
 /*
@@ -141,7 +142,73 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, 
     return lastEmpty, false
 }
 
-func (hdr *bucketHdr)
+func (arr *bucketArray) init(t *maptype) {
+    // First thing we need to do is allocate all bucketChain's in each bucketHdr
+    for i := 0; i < MAXBUCKETS; i++ {
+        chain := (*bucketChain) newobject(t.bucketchain)
+        
+        // Populate up to MAXCHAIN bucketChain's. Avoids having to create call this repeatedly in the future.
+        for j := 1; j < MAXCHAIN; j++ {
+            chain.next = (*bucketChain) newobject(t.bucketchain)
+        }
+    }
+
+    arr.seed = fastrand1()
+}
+
+// Assumes hdr holds a bucketChain and is not currently locked
+func (hdr *bucketHdr) add(t *maptype, key unsafe.Pointer, value unsafe.Pointer) {
+    b, pres := hdr.findBucket(t, key)
+
+    // If the bucket is not present in the map, we must create a new one.
+    if !pres {
+        // If a bucket was not returned, then the bucket is actually full.
+        if b == nil {
+            // Unchain the bucket pointed to by hdr. 'bucket' now points to a bucketArray
+            hdr.chainToArray(t, key)
+            
+            // Rehash the key and recursively add it to the new bucketArray
+            idx := t.key.alg.hash(key, array.seed) % MAXBUCKETS
+            hdr.data[idx].add(t, key, value)
+        } else {
+            // If we're in this block, then there is a spare bucket
+            b.key = key
+            b.value = value
+        }
+    } else {
+        // If we are in this block, then the bucket exists and we just update it.
+        // Typememmove is a ... TODO: fill out comment
+        oldKey := b.key
+        oldVal := b.val
+
+        if t.indirectkey {
+            oldKey = *(*unsafe.Pointer)(oldKey)
+        }
+
+        if t.indirectvalue {
+            oldVal := *(*unsafe.Pointer)(oldVal)
+        }
+
+        // If we are required to update key, do so
+        if t.needkeyupdate {
+            typedmemmove(t.key, oldKey, key)
+        }
+
+        typedmemmove(t.elem, oldVal, val)
+    }
+}
+
+func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer) {
+    array := (*bucketArray) newobject(t.bucketarray)
+    array.init()
+    for b := (*bucketChain)(hdr.b); b.flags != 0; b = b.next {
+        idx := t.key.alg.hash(b.key(t), array.seed) % MAXBUCKETS
+        array.data[idx].add(t, b.key(t), b.value(t))
+        b.key = b.value = nil
+    }
+
+    hdr.b = unsafe.Pointer(array)
+}
 
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
@@ -154,10 +221,7 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     
     // Initialize and allocate our concurrentMap
     cmap := (*concurrentMap)(newobject(t.concurrentmap))
-    for i := 0; i < MAXBUCKETS; i++ {
-        cmap.root.data[i].bucket = newobject(t.bucketchain)
-    }
-    cmap.root.seed = fastrand1()
+    cmap.root.init(t)
 
     h.chdr = unsafe.Pointer(cmap)
     h.flags = 8
@@ -173,6 +237,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 
     // If the bucket is not present in the map, we must create a new one.
     if !pres {
+        // If a bucket was not returned, then the bucket is actually full.
         if !b {
 
         }

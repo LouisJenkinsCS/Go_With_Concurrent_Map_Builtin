@@ -267,10 +267,11 @@ func bucketChain(t *Type) *Type {
 	bchain := typ(TSTRUCT)
 	bchain.Noalg = true
 	
-	var field [3]*Field
+	var field [4]*Field
 	field[0] = makefield("next", Ptrto(bchain))
-	field[1] = makefield("key", keytype)
-	field[2] = makefield("val", valtype)
+	field[1] = makefield("flags", Types[TUINTPTR]) // uintptr guaranteed to have proper padding.
+	field[2] = makefield("key", keytype)
+	field[3] = makefield("val", valtype)
 	
 	bchain.SetFields(field[:])
 	dowidth(bchain)
@@ -287,9 +288,7 @@ func bucketHdr(t *Type) *Type {
 
 	var field [3]*Field
 	field[0] = makefield("bucket", Types[TUNSAFEPTR])
-	field[1] = makefield("flags", Types[TUINT32])
-	// TODO: Find a way to set type to 'g'
-	field[2] = makefield("g", Types[TUNSAFEPTR])
+	field[1] = makefield("info", Types[TUINTPTR])
 
 	bhdr := typ(TSTRUCT)
 	bhdr.Noalg = true

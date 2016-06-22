@@ -2252,6 +2252,7 @@ func convas(n *Node, init *Nodes) *Node {
 
 		val = Nod(OADDR, val, nil)
 		n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
+		// L.J: ADD_WRITE_BARRIER
 		goto out
 	}
 
