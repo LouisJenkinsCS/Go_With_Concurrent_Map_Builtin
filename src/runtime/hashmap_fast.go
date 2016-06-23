@@ -10,6 +10,10 @@ import (
 )
 
 func mapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
+	if h != nil && (h.flags & concurrent) != 0 {
+		return cmapaccess1_fast32(t, h, key)
+	}
+
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess1_fast32))
@@ -55,6 +59,10 @@ func mapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
 }
 
 func mapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
+	if h != nil && (h.flags & concurrent) != 0 {
+		return cmapaccess2_fast32(t, h, key)
+	}
+
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess2_fast32))
@@ -100,6 +108,10 @@ func mapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
 }
 
 func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
+	if h != nil &&  (h.flags & concurrent) != 0 {
+		return cmapaccess1_fast64(t, h, key)
+	}
+	
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess1_fast64))
@@ -145,6 +157,10 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 }
 
 func mapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
+	if h != nil &&  (h.flags & concurrent) != 0 {
+		return cmapaccess2_fast64(t, h, key)
+	}
+
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess2_fast64))
@@ -190,6 +206,10 @@ func mapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
 }
 
 func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
+	if h != nil &&  (h.flags & concurrent) != 0 {
+		return cmapaccess1_faststr(t, h, ky)
+	}
+
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess1_faststr))
@@ -295,6 +315,10 @@ dohash:
 }
 
 func mapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
+	if h != nil && (h.flags & concurrent) != 0 {
+		return cmapaccess2_faststr(t, h, ky)
+	}
+
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess2_faststr))

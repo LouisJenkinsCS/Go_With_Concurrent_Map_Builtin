@@ -534,10 +534,6 @@ func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe
 }
 
 func mapaccess1_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) unsafe.Pointer {
-	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
-	}
-
 	v := mapaccess1(t, h, key)
 	if v == unsafe.Pointer(&zeroVal[0]) {
 		return zero
@@ -546,10 +542,6 @@ func mapaccess1_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) unsafe.Pointe
 }
 
 func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Pointer, bool) {
-	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
-	}
-
 	v := mapaccess1(t, h, key)
 	if v == unsafe.Pointer(&zeroVal[0]) {
 		return zero, false

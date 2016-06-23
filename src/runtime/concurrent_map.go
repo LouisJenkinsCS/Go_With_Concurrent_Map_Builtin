@@ -25,6 +25,12 @@ const (
 
     // Debug flag
     DEBUG = true
+
+    // See hashmap.go, this obtains a properly aligned offset to the data
+    cdataOffset = unsafe.Offsetof(struct {
+		b bucketChain
+		v int64
+	}{}.v)
 )
 
 var DUMMY_RETVAL [MAXZERO]byte
@@ -77,7 +83,7 @@ func (chain *bucketChain) key(t *maptype) unsafe.Pointer {
     // Cast chain to an unsafe.Pointer to bypass Go's type system
     rawChain := unsafe.Pointer(chain)
     // The key offset is right at the end of the bucketChain
-    keyOffset := uintptr(rawChain) + unsafe.Sizeof(chain)
+    keyOffset := uintptr(rawChain) + uintptr(cdataOffset)
     return unsafe.Pointer(keyOffset)
 }
 
@@ -85,7 +91,7 @@ func (chain *bucketChain) value(t *maptype) unsafe.Pointer {
     // Cast chain to an unsafe.Pointer to bypass Go's type system
     rawChain := unsafe.Pointer(chain)
     // The key offset is right at the end of the bucketChain
-    keyOffset := uintptr(rawChain) + unsafe.Sizeof(chain)
+    keyOffset := uintptr(rawChain) + uintptr(cdataOffset)
     // The value offset is right after the end of the key (The size of the key is kept in maptype)
     valOffset := keyOffset + uintptr(t.keysize)
 
@@ -139,14 +145,18 @@ func (hdr *bucketHdr) unlock() {
 }
 
 func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, bool) {
-    var lastEmpty *bucketChain
+    var firstEmpty *bucketChain
     b := (*bucketChain)(hdr.bucket)
-    println("hdr: ", hdr, ";bucket: ", b)
+    println("hdr: ", hdr, ";bucket: ", b, ";key = ", key)
     for i := 0; i < MAXCHAIN; i++ {
         println("...bucket #", i, "!")
+        println(".........b = ", b, ";b.next = ", b.next)
         // If the bucketChain is not in use
         if b.flags == UNUSED {
-            lastEmpty = b
+            // We will be directly returning the first empty bucket if not found.
+            if firstEmpty == nil {
+                firstEmpty = b
+            }
             b = b.next
             continue
         }
@@ -167,9 +177,11 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, 
 
         println("......b.key and requested key do not match")
         println(".........b.key: ", otherKey, ";key: ", key)
+
+        b = b.next
     }
 
-    return lastEmpty, false
+    return firstEmpty, false
 }
 
 func (arr *bucketArray) init(t *maptype) {
@@ -285,7 +297,7 @@ func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer) {
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
     println("Sizeof bucketHdr: ", unsafe.Sizeof(bucketHdr{}), "\nSizeof bucketArray: ", unsafe.Sizeof(bucketArray{}))
-    
+    println("Sizeof bucketChain: ", unsafe.Sizeof(bucketChain{}), "\nSizeof cdataOffset: ", cdataOffset)
     // Initialize the hashmap if needed
     if h == nil {
 		h = (*hmap)(newobject(t.hmap))
@@ -306,7 +318,44 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
     cmap := (*concurrentMap)(h.chdr)
     hdr := cmap.root.findBucket(t, key)
     hdr.add(t, key, val)
+    h.count++
 }
+
+
+/*
+    Concurrent hashmap_fast.go function implementations
+*/
+func cmapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
+    throw("Unsupported concurrent operation")
+    return nil
+}
+
+func cmapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
+    throw("Unsupported concurrent operation")
+    return nil, false
+}
+
+
+func cmapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
+    throw("Unsupported concurrent operation")
+    return nil
+}
+
+func cmapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
+    throw("Unsupported concurrent operation")
+    return nil, false
+}
+
+func cmapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
+    throw("Unsupported concurrent operation")
+    return nil
+}
+
+func cmapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
+    throw("Unsupported concurrent operation")
+    return nil, false
+}
+
 
 func cmapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
     println("Inside of cmapaccess2!")
