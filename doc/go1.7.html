@@ -288,6 +288,18 @@ To avoid confusion with the new <code>-tests</code> check, the old, unadvertised
 <code>-test</code> option has been removed; it was equivalent to <code>-all</code> <code>-shadow</code>.
 </p>
 
+<p id="vet_lostcancel">
+The <code>vet</code> command also has a new check,
+<code>-lostcancel</code>, which detects failure to call the
+cancellation function returned by the <code>WithCancel</code>,
+<code>WithTimeout</code>, and <code>WithDeadline</code> functions in
+Go 1.7's new <code>context</code> package (see <a
+href='#context'>below</a>).
+Failure to call the function prevents the new <code>Context</code>
+from being reclaimed until its parent is cancelled.
+(The background context is never cancelled.)
+</p>
+
 <h3 id="cmd_dist">Go tool dist</h3>
 
 <p>
@@ -853,6 +865,16 @@ pads response codes less than 100 to three digits
 as required by the protocol,
 so that <code>w.WriteHeader(5)</code> uses the HTTP response
 status <code>005</code>, not just <code>5</code>.
+</p>
+
+<p>
+The server implementation now correctly sends only one "Transfer-Encoding" header when "chunked"
+is set explicitly, following <a href="https://tools.ietf.org/html/rfc7230#section-3.3.1">RFC 7230</a>.
+</p>
+
+<p>
+In the server, a 200 status code is sent back by the timeout handler on an empty
+response body, instead of sending back 0 as the status code.
 </p>
 
 <p>
