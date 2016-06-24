@@ -16,6 +16,15 @@ const (
 	tmpstringbufsize = 32
 )
 
+var shouldRelease bool = false
+
+// L.J: Injected call to release the bucketHdr
+func concurrentMapRelease(init *Nodes) *Node {
+	fn := syslook("maprelease")
+	n := mkcall1(fn, nil, init)
+	return n
+}
+
 func walk(fn *Node) {
 	Curfn = fn
 
@@ -798,6 +807,14 @@ opswitch:
 			n = applywritebarrier(n)
 		}
 
+		if shouldRelease {
+			shouldRelease = false
+			rFn := concurrentMapRelease(init)
+			rFn.Ninit.Append(n)
+			rFn = walkexpr(rFn, init)
+			n = rFn
+		}
+
 	case OAS2:
 		init.AppendNodes(&n.Ninit)
 		walkexprlistsafe(n.List.Slice(), init)
@@ -1218,6 +1235,7 @@ opswitch:
 		if n.Etype == 1 {
 			break
 		}
+
 		n.Left = walkexpr(n.Left, init)
 		n.Right = walkexpr(n.Right, init)
 
@@ -1256,7 +1274,8 @@ opswitch:
 		n = Nod(OIND, n, nil)
 		n.Type = t.Val()
 		n.Typecheck = 1
-
+		shouldRelease = true
+	
 		// /*
 		// 	L.J:
 				
@@ -2252,7 +2271,10 @@ func convas(n *Node, init *Nodes) *Node {
 
 		val = Nod(OADDR, val, nil)
 		n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
-		// L.J: ADD_WRITE_BARRIER
+		rFn := concurrentMapRelease(init)
+		rFn.Ninit.Append(n)
+		rFn = walkexpr(rFn, init)
+		n = rFn
 		goto out
 	}
 

@@ -106,14 +106,31 @@ func (chain *bucketChain) value(t *maptype) unsafe.Pointer {
 func (b *bucketArray) findBucket(t *maptype, key unsafe.Pointer) *bucketHdr {
     // Hash the key using bucketArray-specific seed to obtain index of header
     idx := t.key.alg.hash(key, uintptr(b.seed)) % MAXBUCKETS
-    hdr := b.data[idx]
+    hdr := &(b.data[idx])
+    g := getg().m.curg
+    gptr := uintptr(unsafe.Pointer(getg().m.curg))
+    spins := 0
 
-    println("Obtained bucketHdr #", idx, " with seed: ", b.seed)
+    // println("Obtained bucketHdr #", idx, " with seed: ", b.seed)
 
     // TODO: Use the holder 'g' to keep track of whether or not the holder is still running or not to determine if we should yield.
     for {
         // Simple atomic load for flags.
         flags := atomic.Loaduintptr(&hdr.info)
+
+        // Check if we are the current holders of the lock, spin if someone else holds the lock
+        lockHolder := uintptr(flags &^ 0x7)
+
+        // println("......gptr: ", gptr, ";lockHolder: ", lockHolder, ";flags: ", flags)
+
+        if lockHolder == gptr {
+            // println("...goroutine ", getg().m.curg.goid, "re-entered the lock")
+            return &(b.data[idx])
+        } else if lockHolder != 0 {
+            spins++
+            Gosched()
+            continue
+        }
 
         // Obtain the lower three marked bits to be OR'd back into flags if we succeed the CAS
         lowBits := uintptr(flags & 0x7)
@@ -123,20 +140,19 @@ func (b *bucketArray) findBucket(t *maptype, key unsafe.Pointer) *bucketHdr {
             return (*bucketArray)(hdr.bucket).findBucket(t, key)
         }
 
-        // Check if we are the current holders of the lock, spin if someone else holds the lock
-        gptr := uintptr(unsafe.Pointer(getg()))
-        lockHolder := uintptr(flags &^ 0x7)
-        if lockHolder == gptr {
-            return &b.data[idx]
-        } else if lockHolder != 0 {
-            continue
-        }
-        
         // Attempt to acquire the lock ourselves atomically
-        gptr = gptr | lowBits
-        if atomic.Casuintptr(&hdr.info, flags, gptr) {
-            return &b.data[idx]
+        if atomic.Casuintptr(&(b.data[idx].info), flags, gptr | lowBits) {
+            // println("...goroutine ", getg().m.curg.goid, " with address ", getg().m.curg, " acquired the lock")
+            g.releaseBucket = unsafe.Pointer(&b.data[idx])
+            g.releaseM = acquirem()
+            if spins > 0 {
+                println("......g #", g.goid, " has wasted ", spins, " CPU cycles spinning")
+            }
+            return &(b.data[idx])
         }
+
+        spins++
+        Gosched()
     }
 }
 
@@ -144,13 +160,13 @@ func (hdr *bucketHdr) unlock() {
     // TODO: Implement unlocking mechanism (atomic)
 }
 
-func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, bool) {
+func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer, equal func (k1, k2 unsafe.Pointer) bool) (*bucketChain, bool) {
     var firstEmpty *bucketChain
     b := (*bucketChain)(hdr.bucket)
-    println("hdr: ", hdr, ";bucket: ", b, ";key = ", key)
+    // println("hdr: ", hdr, ";bucket: ", b, ";key = ", key)
     for i := 0; i < MAXCHAIN; i++ {
-        println("...bucket #", i, "!")
-        println(".........b = ", b, ";b.next = ", b.next)
+        // println("...bucket #", i, "!")
+        // println(".........b = ", b, ";b.next = ", b.next)
         // If the bucketChain is not in use
         if b.flags == UNUSED {
             // We will be directly returning the first empty bucket if not found.
@@ -161,7 +177,7 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, 
             continue
         }
 
-        println("......had b.flags != UNUSED")
+        // println("......had b.flags != UNUSED")
 
         // Whether we took the key by value or by reference, we resolve that here.
         otherKey := b.key(t)
@@ -169,14 +185,14 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, 
             otherKey = *(*unsafe.Pointer)(otherKey)
         }
 
-        println("......b.key could successfully be obtained")
+        // println("......b.key could successfully be obtained")
 
-        if t.key.alg.equal(key, otherKey) {
+        if equal(key, otherKey) {
             return b, true
         }
 
-        println("......b.key and requested key do not match")
-        println(".........b.key: ", otherKey, ";key: ", key)
+        // println("......b.key and requested key do not match")
+        // println(".........b.key: ", otherKey, ";key: ", key)
 
         b = b.next
     }
@@ -185,22 +201,22 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer) (*bucketChain, 
 }
 
 func (arr *bucketArray) init(t *maptype) {
-    println("Initializing bucketArray")
+    // println("Initializing bucketArray")
     // First thing we need to do is allocate all bucketChain's in each bucketHdr
     for i := 0; i < MAXBUCKETS; i++ {
         chain := (*bucketChain)(newobject(t.bucketchain))
-        println("...Root chain: ", chain)
+        // // println("...Root chain: ", chain)
         tmpChain := chain
         hdr := &arr.data[i]
-        println("...Allocated bucket #", i + 1)
+        // // println("...Allocated bucket #", i + 1)
 
         // Populate up to MAXCHAIN bucketChain's. Avoids having to create call this repeatedly in the future.
         for j := 1; j < MAXCHAIN; j++ {
             tmpChain.next = (*bucketChain) (newobject(t.bucketchain))
-            println(".........Next chain: ", tmpChain.next)
+            // // println(".........Next chain: ", tmpChain.next)
             tmpChain.flags = UNUSED
             tmpChain = tmpChain.next
-            println("......Allocated bucketChain #", j)
+            // // println("......Allocated bucketChain #", j)
         }
 
         hdr.bucket = unsafe.Pointer(chain)
@@ -211,24 +227,24 @@ func (arr *bucketArray) init(t *maptype) {
 }
 
 // Assumes hdr holds a bucketChain and is not currently locked
-func (hdr *bucketHdr) add(t *maptype, key unsafe.Pointer, value unsafe.Pointer) {
-    b, pres := hdr.findBucket(t, key)
-    println("Adding key-value pair to bucketHdr")
+func (hdr *bucketHdr) add(t *maptype, key unsafe.Pointer, value unsafe.Pointer, equal func (k1, k2 unsafe.Pointer) bool) {
+    b, pres := hdr.findBucket(t, key, equal)
+    // println("Adding key-value pair to bucketHdr")
 
     // If the bucket is not present in the map, we must create a new one.
     if !pres {
         // If a bucket was not returned, then the bucket is actually full.
         if b == nil {
-            println("...A bucket is full, resizing")
+            // println("...A bucket is full, resizing")
             // Unchain the bucket pointed to by hdr. 'bucket' now points to a bucketArray
-            hdr.chainToArray(t, key)
+            hdr.chainToArray(t, key, equal)
             array := (*bucketArray)(hdr.bucket)
 
             // Rehash the key and recursively add it to the new bucketArray
             idx := t.key.alg.hash(key, uintptr(array.seed)) % MAXBUCKETS
-            array.data[idx].add(t, key, value)
+            array.data[idx].add(t, key, value, equal)
         } else {
-            println("...Key is not present in the map, but a bucket is empty, reusing")
+            // println("...Key is not present in the map, but a bucket is empty, reusing")
             // if b != nil, then it returns the last bucket not in-use so we can recycle
             // These are actually the memory locations where the key and value reside
             k := b.key(t)
@@ -236,13 +252,13 @@ func (hdr *bucketHdr) add(t *maptype, key unsafe.Pointer, value unsafe.Pointer) 
 
             // If either key or value is indirect, we must allocate a new object and copy into it.
             if t.indirectkey {
-                println("......Key is indirect")
+                // println("......Key is indirect")
                 kmem := newobject(t.key)
                 *(*unsafe.Pointer)(k) = kmem
                 k = kmem
             }
             if t.indirectvalue {
-                println("......Value is indirect")
+                // println("......Value is indirect")
                 vmem := newobject(t.elem)
                 *(*unsafe.Pointer)(v) = vmem
                 v = vmem
@@ -255,7 +271,7 @@ func (hdr *bucketHdr) add(t *maptype, key unsafe.Pointer, value unsafe.Pointer) 
             b.flags = USED
         }
     } else {
-        println("...Key is present in map, updating bucket")
+        // println("...Key is present in map, updating bucket")
         // If we are in this block, then the bucket exists and we just update it.
         k := b.key(t)
         v := b.value(t)
@@ -277,12 +293,16 @@ func (hdr *bucketHdr) add(t *maptype, key unsafe.Pointer, value unsafe.Pointer) 
     }
 }
 
-func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer) {
+func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) {
+    // println("Converting bucketChain to bucketArray")
     array := (*bucketArray)(newobject(t.bucketarray))
     array.init(t)
-    for b := (*bucketChain)(hdr.bucket); b.flags != 0; b = b.next {
+    // println("...bucketArray allocated and initialized")
+    for b := (*bucketChain)(hdr.bucket); b != nil; b = b.next {
         idx := t.key.alg.hash(b.key(t), uintptr(array.seed)) % MAXBUCKETS
-        array.data[idx].add(t, b.key(t), b.value(t))
+        array.data[idx].add(t, b.key(t), b.value(t), equal)
+        
+        // println("......Moved bucket ", b, " to index #", idx)
 
         // Now we must call memclr to let GC know the old copies no longer contains a reference to data.
         // memclr works by sweeping from [offset, offset + n) 
@@ -291,13 +311,22 @@ func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer) {
     }
 
     hdr.bucket = unsafe.Pointer(array)
-    // TODO: Set flags to ARRAY
+    
+    // Atomically 'OR' ARRAY in place without releasing the spinlock
+    for {
+        oldInfo := atomic.Loaduintptr(&hdr.info)
+        if atomic.Casuintptr(&hdr.info, oldInfo, oldInfo | ARRAY) {
+            break;
+        }
+    }
+
+    // println("...Converted bucketChain to bucketArray")
 }
 
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
-    println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
-    println("Sizeof bucketHdr: ", unsafe.Sizeof(bucketHdr{}), "\nSizeof bucketArray: ", unsafe.Sizeof(bucketArray{}))
-    println("Sizeof bucketChain: ", unsafe.Sizeof(bucketChain{}), "\nSizeof cdataOffset: ", cdataOffset)
+    // println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
+    // println("Sizeof bucketHdr: ", unsafe.Sizeof(bucketHdr{}), "\nSizeof bucketArray: ", unsafe.Sizeof(bucketArray{}))
+    // println("Sizeof bucketChain: ", unsafe.Sizeof(bucketChain{}), "\nSizeof cdataOffset: ", cdataOffset)
     // Initialize the hashmap if needed
     if h == nil {
 		h = (*hmap)(newobject(t.hmap))
@@ -314,55 +343,146 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 }
 
 func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
-    println("Inside of cmapassign1!")
+    // println("Inside of cmapassign1!")
     cmap := (*concurrentMap)(h.chdr)
     hdr := cmap.root.findBucket(t, key)
-    hdr.add(t, key, val)
+    hdr.add(t, key, val, t.key.alg.equal)
     h.count++
 }
 
+func maprelease() {
+    g := getg()
+    if g.releaseBucket != nil {
+        // println("Inside of maprelease for g ", g.goid, "!")
+        hdr := (*bucketHdr)(g.releaseBucket)
+        
+        // Atomically release lock
+        for {
+            oldFlags := atomic.Loaduintptr(&hdr.info)
+            if atomic.Casuintptr(&hdr.info, oldFlags, uintptr(oldFlags & 0x7)) {
+                break
+            }
+        }
+
+        g.releaseBucket = nil
+        releasem(g.releaseM)
+        g.releaseM = nil
+    }
+}
 
 /*
     Concurrent hashmap_fast.go function implementations
 */
 func cmapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
-    throw("Unsupported concurrent operation")
-    return nil
+    // println("Inside of cmapaccess1_fast32!")
+    retval, _ := cmapaccess2_fast32(t, h, key)
+    return retval
 }
 
 func cmapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
-    throw("Unsupported concurrent operation")
-    return nil, false
+    // println("Inside of cmapaccess2_fast32!")
+    keyPtr := noescape(unsafe.Pointer(&key))
+    // TODO: Set chdr to be of type concurrentMap, then no need to cast
+    cmap := (*concurrentMap)(h.chdr)
+    hdr := cmap.root.findBucket(t, keyPtr)
+    b, pres := hdr.findBucket(t, keyPtr, 
+        func (k1, k2 unsafe.Pointer) bool { 
+            return *(*uint32)(k1) == *(*uint32)(k2) 
+        })
+    var retval unsafe.Pointer
+
+    // If the bucket is present in the map...
+    if pres {
+        retval = b.value(t)
+        if t.indirectvalue {
+            retval = *(*unsafe.Pointer)(retval)
+        }
+    } else {
+        retval = unsafe.Pointer(&DUMMY_RETVAL[0])
+    }
+
+    // hdr.unlock()
+
+    return retval, pres
 }
 
 
 func cmapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
-    throw("Unsupported concurrent operation")
-    return nil
+    // println("Inside of cmapaccess1_fast64")
+    retval, _ := cmapaccess2_fast64(t, h, key)
+    return retval
 }
 
 func cmapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
-    throw("Unsupported concurrent operation")
-    return nil, false
+    // println("Inside of cmapaccess2_fast64!")
+    keyPtr := noescape(unsafe.Pointer(&key))
+    // TODO: Set chdr to be of type concurrentMap, then no need to cast
+    cmap := (*concurrentMap)(h.chdr)
+    hdr := cmap.root.findBucket(t, keyPtr)
+    b, pres := hdr.findBucket(t, keyPtr, 
+        func (k1, k2 unsafe.Pointer) bool { 
+            return *(*uint64)(k1) == *(*uint64)(k2) 
+        })
+    var retval unsafe.Pointer
+
+    // If the bucket is present in the map...
+    if pres {
+        retval = b.value(t)
+        if t.indirectvalue {
+            retval = *(*unsafe.Pointer)(retval)
+        }
+    } else {
+        retval = unsafe.Pointer(&DUMMY_RETVAL[0])
+    }
+
+    // hdr.unlock()
+
+    return retval, pres
 }
 
-func cmapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
-    throw("Unsupported concurrent operation")
-    return nil
+func cmapaccess1_faststr(t *maptype, h *hmap, key string) unsafe.Pointer {
+    // println("Inside of cmapaccess1_faststr")
+    retval, _ := cmapaccess2_faststr(t, h, key)
+    return retval
 }
 
-func cmapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
-    throw("Unsupported concurrent operation")
-    return nil, false
+func cmapaccess2_faststr(t *maptype, h *hmap, key string) (unsafe.Pointer, bool) {
+    // println("Inside of cmapaccess2_faststr")
+    keyPtr := noescape(unsafe.Pointer(&key))
+    // TODO: Set chdr to be of type concurrentMap, then no need to cast
+    cmap := (*concurrentMap)(h.chdr)
+    hdr := cmap.root.findBucket(t, keyPtr)
+    b, pres := hdr.findBucket(t, keyPtr, 
+        func (k1, k2 unsafe.Pointer) bool { 
+            sk1 := (*stringStruct)(k1)
+            sk2 := (*stringStruct)(k2)
+            return sk1.len == sk2.len && 
+            (sk1.str == sk2.str || memequal(sk1.str, sk2.str, uintptr(sk1.len))) 
+        })
+    var retval unsafe.Pointer
+
+    // If the bucket is present in the map...
+    if pres {
+        retval = b.value(t)
+        if t.indirectvalue {
+            retval = *(*unsafe.Pointer)(retval)
+        }
+    } else {
+        retval = unsafe.Pointer(&DUMMY_RETVAL[0])
+    }
+
+    // hdr.unlock()
+
+    return retval, pres
 }
 
 
 func cmapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
-    println("Inside of cmapaccess2!")
+    // println("Inside of cmapaccess2!")
     // TODO: Set chdr to be of type concurrentMap, then no need to cast
     cmap := (*concurrentMap)(h.chdr)
     hdr := cmap.root.findBucket(t, key)
-    b, pres := hdr.findBucket(t, key)
+    b, pres := hdr.findBucket(t, key, t.key.alg.equal)
     var retval unsafe.Pointer
 
     // If the bucket is present in the map...
@@ -381,7 +501,7 @@ func cmapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool)
 }
 
 func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-    println("Inside of cmapaccess1")
+    // println("Inside of cmapaccess1")
     retval, _ := cmapaccess2(t, h, key)
 
     // Only difference is that we discard the boolean

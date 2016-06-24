@@ -372,6 +372,10 @@ type g struct {
 	// and check for debt in the malloc hot path. The assist ratio
 	// determines how this corresponds to scan work debt.
 	gcAssistBytes int64
+
+	// L.J Injected concurrent map pointer to bucket to be released
+	releaseBucket unsafe.Pointer
+	releaseM *m
 }
 
 type m struct {
