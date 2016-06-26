@@ -275,6 +275,7 @@ func bucketChain(t *Type) *Type {
 	
 	bchain.SetFields(field[:])
 	dowidth(bchain)
+	bchain.Local = t.Local
 	t.MapType().BucketChain = bchain
 	bchain.StructType().Map = t
 
@@ -292,6 +293,7 @@ func bucketHdr(t *Type) *Type {
 
 	bhdr := typ(TSTRUCT)
 	bhdr.Noalg = true
+	bhdr.Local = t.Local
 	bhdr.SetFields(field[:])
 	dowidth(bhdr)
 	t.MapType().BucketHdr = bhdr
@@ -305,9 +307,10 @@ func bucketArray(t *Type) *Type {
 		return t.MapType().BucketArray
 	}
 
-	var field [2]*Field
-	field[0] = makefield("data", typArray(bucketHdr(t), 16))
+	var field [3]*Field
+	field[0] = makefield("data", typSlice(bucketHdr(t)))
 	field[1] = makefield("seed", Types[TUINT32])
+	field[2] = makefield("size", Types[TUINT32])
 
 	barr := typ(TSTRUCT)
 	barr.Noalg = true
@@ -333,6 +336,7 @@ func concurrentMap(t *Type) *Type {
 
 	cmap := typ(TSTRUCT)
 	cmap.Noalg = true
+	cmap.Local = t.Local
 	cmap.SetFields(field[:])
 	dowidth(cmap)
 	t.MapType().ConcurrentMap = cmap

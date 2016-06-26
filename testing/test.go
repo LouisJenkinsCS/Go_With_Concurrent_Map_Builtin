@@ -10,20 +10,20 @@ type point struct {
 }
 
 const (
-	cols = 1000
-	rows = 1000
+	cols = 100
+	rows = 100
 )
 
 var mtx sync.Mutex
 
 var c chan int
 
-func populate_map_sync(m map[string]point) {
+func populate_map_sync(m map[point]string) {
 	for i := 0; i < rows; i++ {
 		go func (idx int) { 
 			for j := 0; j < cols; j++ {
-				key := fmt.Sprintf("%v, %v", idx, j)
-				val := point{idx, j}
+				val := fmt.Sprintf("{%v, %v}", idx, j)
+				key := point{idx, j}
 				mtx.Lock()
 				m[key] = val
 				mtx.Unlock()
@@ -33,12 +33,12 @@ func populate_map_sync(m map[string]point) {
 	}
 }
 
-func populate_map(m map[string]point) {
+func populate_map(m map[point]string) {
 	for i := 0; i < rows; i++ {
 		go func (idx int) { 
 			for j := 0; j < cols; j++ {
-				key := fmt.Sprintf("%v, %v", idx, j)
-				val := point{idx, j}
+				val := fmt.Sprintf("{%v, %v}", idx, j)
+				key := point{idx, j}
 				m[key] = val
 			}
 			c <- 0
@@ -48,8 +48,8 @@ func populate_map(m map[string]point) {
 
 
 func main() {
-	m := make(map[string]point, 0, 1)
-	n := make(map[string]point)
+	m := make(map[point]string, 0, 1)
+	n := make(map[point]string)
 	c = make(chan int)
 
 	start := time.Now()
@@ -68,6 +68,17 @@ func main() {
 	elapsed = time.Since(start)
 	fmt.Println("Concurrent Map Time: ", elapsed)
 
+	// for i := 0; i < rows; i++ {
+	// 	for j := 0; j < cols; j++ {
+	// 		val := fmt.Sprintf("{%v, %v}", i, j)
+	// 		key := point{i, j}
+	// 		retval := m[key]
+	// 		if retval != val {
+	// 			fmt.Printf("Key: %v does not match value %v;Got %v\n", key, val, retval)
+	// 		}
+	// 	}
+	// }
+
 	// go func() {m[point{3, 3}] = point{0, 0}; fmt.Println(m[point{3, 3}])}()
-	fmt.Println("\n\nMain Thread: ", m["3, 3"], n["3, 3"], "\n\n")
+	fmt.Println("\n\nMain Thread: ", m[point{1, 1}], n[point{1, 1}], "\n\n")
 }
