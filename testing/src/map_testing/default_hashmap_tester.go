@@ -41,4 +41,16 @@ func TestDefaultMap() {
 	// cpuProf.Stop()
 	memProf.Stop()
 	log.Println("Default Map Time: ", end)
+
+	log.Println("Testing Default Map accuracy")
+	for i := 0; i < ROWS; i++ {
+		for j := 0; j < COLS; j++ {
+			key := point{i, j}
+			val := point{ROWS - i, COLS - j}
+			retval := m[key]
+			if retval != val {
+				log.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
+			}
+		}
+	}
 }

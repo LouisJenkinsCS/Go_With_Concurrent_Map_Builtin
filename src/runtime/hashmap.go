@@ -780,6 +780,7 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 		it.overflow = *h.overflow
 	}
 
+	// L.J: Randomize order
 	// decide where to start
 	r := uintptr(fastrand1())
 	if h.B > 31-bucketCntBits {
