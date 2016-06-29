@@ -8,7 +8,7 @@ func populate_map_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
 		go func (idx int) { 
 			for j := 0; j < COLS; j++ {
-				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
+				key, val := point{idx, j, 0}, point{ROWS - idx, COLS - j, 0}
 				m[key] = val
 			}
 			c <- 0
@@ -38,8 +38,8 @@ func TestConcurrentMap() {
     log.Println("Testing Concurrent Map accuracy")
 	for i := 0; i < ROWS; i++ {
 		for j := 0; j < COLS; j++ {
-			key := point{i, j}
-			val := point{ROWS - i, COLS - j}
+			key := point{i, j, 0}
+			val := point{ROWS - i, COLS - j, 0}
 			retval := m[key]
 			if retval != val {
 				log.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)

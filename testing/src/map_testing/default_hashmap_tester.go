@@ -14,7 +14,7 @@ func populate_map_sync_struct(m map[point]point) {
 		go func (idx int) { 
 			for j := 0; j < COLS; j++ {
 				// val := fmt.Sprintf("{%v, %v}", idx, j)
-				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
+				key, val := point{idx, j, 0}, point{ROWS - idx, COLS - j, 0}
 				mtx.Lock()
 				m[key] = val
 				mtx.Unlock()
@@ -45,8 +45,8 @@ func TestDefaultMap() {
 	log.Println("Testing Default Map accuracy")
 	for i := 0; i < ROWS; i++ {
 		for j := 0; j < COLS; j++ {
-			key := point{i, j}
-			val := point{ROWS - i, COLS - j}
+			key := point{i, j, 0}
+			val := point{ROWS - i, COLS - j, 0}
 			retval := m[key]
 			if retval != val {
 				log.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)

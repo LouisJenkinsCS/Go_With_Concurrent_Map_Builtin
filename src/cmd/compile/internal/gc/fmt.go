@@ -693,8 +693,20 @@ func typefmt(t *Type, flag FmtFlag) string {
 				return "map.iter[" + m.Key().String() + "]" + m.Val().String()
 			}
 
-			if mt.ConcurrentMap == t || mt.BucketArray == t || mt.BucketChain == t || mt.BucketHdr == t {
+			if mt.ConcurrentMap == t {
 				return "map.concurrent[" + m.Key().String() + "]" + m.Val().String()
+			}
+
+			if mt.BucketArray == t {
+				return "map.bucketarray[" + m.Key().String() + "]" + m.Val().String()
+			}
+
+			if mt.BucketChain == t {
+				return "map.bucketchain[" + m.Key().String() + "]" + m.Val().String()
+			}
+
+			if mt.BucketHdr == t {
+				return "map.buckethdr[" + m.Key().String() + "]" + m.Val().String()
 			}
 
 			Yyerror("unknown internal map type")

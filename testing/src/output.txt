@@ -1,0 +1,52 @@
+Sizeof bucketHdr:  16 
+Sizeof bucketArray:  32
+Sizeof bucketChain:  64 
+Sizeof cdataOffset:  16 
+Sizeof bmap 400 
+2016/06/29 17:33:21 Key: {2 1 0};Expected: {98 99 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 2 0};Expected: {98 98 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 13 0};Expected: {98 87 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 15 0};Expected: {98 85 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 19 0};Expected: {98 81 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 22 0};Expected: {98 78 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 27 0};Expected: {98 73 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 33 0};Expected: {98 67 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 42 0};Expected: {98 58 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 45 0};Expected: {98 55 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {2 46 0};Expected: {98 54 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {4 1 0};Expected: {96 99 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {4 10 0};Expected: {96 90 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {5 3 0};Expected: {95 97 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {5 6 0};Expected: {95 94 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {5 7 0};Expected: {95 93 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {5 8 0};Expected: {95 92 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {5 14 0};Expected: {95 86 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {8 1 0};Expected: {92 99 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {8 2 0};Expected: {92 98 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {9 2 0};Expected: {91 98 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {14 0 0};Expected: {86 100 0};Received: {0 0 0}
+2016/06/29 17:33:21 Key: {15 0 0};Expected: {85 100 0};Received: {0 0 0}
+2016/06/29 17:33:22 Key: {18 0 0};Expected: {82 100 0};Received: {0 0 0}
+2016/06/29 17:33:22 Key: {24 1 0};Expected: {76 99 0};Received: {0 0 0}
+2016/06/29 17:33:23 Key: {45 10 0};Expected: {55 90 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {51 0 0};Expected: {49 100 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {53 1 0};Expected: {47 99 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {53 3 0};Expected: {47 97 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {57 0 0};Expected: {43 100 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {57 2 0};Expected: {43 98 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {59 0 0};Expected: {41 100 0};Received: {0 0 0}
+2016/06/29 17:33:24 Key: {59 1 0};Expected: {41 99 0};Received: {0 0 0}
+2016/06/29 17:33:25 Key: {87 5 0};Expected: {13 95 0};Received: {0 0 0}
+2016/06/29 17:33:25 Key: {87 7 0};Expected: {13 93 0};Received: {0 0 0}
+2016/06/29 17:33:25 Key: {87 11 0};Expected: {13 89 0};Received: {0 0 0}
+2016/06/29 17:33:25 Key: {87 17 0};Expected: {13 83 0};Received: {0 0 0}
+2016/06/29 17:33:25 Key: {87 20 0};Expected: {13 80 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {88 7 0};Expected: {12 93 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {88 9 0};Expected: {12 91 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {89 1 0};Expected: {11 99 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {89 2 0};Expected: {11 98 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {92 9 0};Expected: {8 91 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {93 8 0};Expected: {7 92 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {96 9 0};Expected: {4 91 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {97 2 0};Expected: {3 98 0};Received: {0 0 0}
+2016/06/29 17:33:26 Key: {99 2 0};Expected: {1 98 0};Received: {0 0 0}

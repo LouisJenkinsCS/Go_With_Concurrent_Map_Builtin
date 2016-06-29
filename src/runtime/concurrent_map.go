@@ -208,6 +208,13 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) *bucketHdr {
 
         // At this point, we know that it isn't LOCKED, and if it is ARRAY, then it will remain that way.
         if (flags & ARRAY) != 0 {
+            // Sanity check for if a thread locked it after we loaded flags
+            if !atomic.Casuintptr(&hdr.info, flags, flags) {
+                spins++
+                Gosched()
+                continue
+            }
+
             if spins > 0 {
                 println("...g #", g.goid, ": Recursing through nested array after spinning ", spins, "waiting for allocation")
             }
@@ -314,7 +321,7 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer, opt bucketSearc
 }
 
 func newBucketChain(t *maptype, key unsafe.Pointer, value unsafe.Pointer) (chain *bucketChain) {
-    chain = (*bucketChain)(mallocgc(cdataOffset + uintptr(t.keysize) + uintptr(t.valuesize), t.bucketchain, true))
+    chain = (*bucketChain)(newobject(t.bucketchain))
     k := chain.key(t)
     v := chain.value(t)
 
@@ -410,23 +417,21 @@ func (hdr *bucketHdr) add(t *maptype, h *hmap, key unsafe.Pointer, value unsafe.
 
 // Claims ownership of the bucketChain, used during chainToArray conversion
 func (hdr *bucketHdr) claim(t *maptype, claimBucket *bucketChain) {
-    copy := newBucketChain(t, claimBucket.key(t), claimBucket.value(t))
-
     // For findBucket, if BUCKET_SEARCH_FIRST_EMPTY is specified, it will not use the rest of these parameters, hence left nil
     bucket, status := hdr.findBucket(nil, nil, BUCKET_SEARCH_LAST_FOUND, nil)
 
     switch status {
         // If it is empty, we simply make it our first.
         case BUCKET_STATUS_EMPTY:
-            hdr.bucket = unsafe.Pointer(copy)
+            hdr.bucket = unsafe.Pointer(claimBucket)
             println(".........g #", getg().goid, ": Bucket is new root...")
         // If instead we find the first empty, we append to that.
         case BUCKET_STATUS_LAST_FOUND:
-            bucket.next = copy
+            bucket.next = claimBucket
             println(".........g #", getg().goid, ": Bucket is chained...")
     }
 
-    copy.print(t)
+    claimBucket.print(t)
 }
 
 func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer, size uint32, equal func(k1, k2 unsafe.Pointer) bool) {
@@ -443,7 +448,6 @@ func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer, size uint32, 
         b.next = nil
         println("......g #", g.goid, ": Moved bucket ", b, " to index #", idx, "with hash: ", uintptr(hash))
         (&array.data[idx]).claim(t, b)
-        memclr(b.key(t), uintptr(t.keysize) + uintptr(t.valuesize))
         b = next
     }
 
@@ -461,7 +465,8 @@ func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer, size uint32, 
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
     println("Sizeof bucketHdr: ", unsafe.Sizeof(bucketHdr{}), "\nSizeof bucketArray: ", unsafe.Sizeof(bucketArray{}))
-    println("Sizeof bucketChain: ", t.bucketchain.size, "\nSizeof cdataOffset: ", cdataOffset, "\nSizeof bmap", t.bucket.size)
+    println("Sizeof bucketChain: ", t.bucketchain.size, "\nSizeof cdataOffset: ", cdataOffset, "\nSizeof bmap", t.bucket.size, "\nName of bmap: ", t.bucket.string())
+    println("Name of bucketChain: ", t.bucketchain.string(), "\nName of bucketArray: ", t.bucketarray.string(), "\nName of bucketHdr: ", t.buckethdr.string())
     // Initialize the hashmap if needed
     if h == nil {
 		h = (*hmap)(newobject(t.hmap))
