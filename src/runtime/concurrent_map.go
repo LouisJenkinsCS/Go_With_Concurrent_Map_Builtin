@@ -67,15 +67,25 @@ type bucketHdr struct {
     // Is either a bucketArray or bucketChain
     bucket unsafe.Pointer
     /*
-        The least significant 3 bits are used as flags and the rest
-        are a pointer to the current 'g' that holds the lock. The 'g' is
-        used to allow it to become reentrant.
-
-        Checking the lock can be as easy as masking out the first three bits.
-        An overall CAS can also make it easier to tell when it is no longer locked,
-        as as soon as the 'g' holding the lock finishes, it will zero the portion
-        used to store the address. This can cause the CAS to fail during a spin
-        and be used to detect if manages to acquire the lock.
+    	Recursive Lock Variant:
+	        The least significant 3 bits are used as flags and the rest
+	        are a pointer to the current 'g' that holds the lock. The 'g' is
+	        used to allow it to become reentrant.
+	
+	        Checking the lock can be as easy as masking out the first three bits.
+	        An overall CAS can also make it easier to tell when it is no longer locked,
+	        as as soon as the 'g' holding the lock finishes, it will zero the portion
+	        used to store the address. This can cause the CAS to fail during a spin
+	        and be used to detect if manages to acquire the lock.
+	        
+    	Non-Recursive Lock Variant:
+    		The least significant 3 bits are used as flags, while the rest remain unused.
+    		
+    		Checking the lock is more efficient in that it only needs to attempt to CAS
+    		this flag from 0 to LOCKED. Since this flag shares ARRAY bit, if ARRAY bit is ever
+    		set, it becomes impossible to CAS from 0 to LOCKED, as 0 != ARRAY, and hence will
+    		always fail, meaning a simple CAS can check both if it is LOCKED or if it is an
+    		ARRAY, and even attempt to acquire the lock all in the same instruction.
     */
     info uintptr
 }
@@ -309,7 +319,7 @@ func (hdr *bucketHdr) findBucket(t *maptype, key unsafe.Pointer, opt bucketSearc
             return b, BUCKET_STATUS_FOUND
         }
 
-        // If this is not the last possible bucketChain, and the user wants to return the last bucket found, do so.
+        // If this is not the last possible bucketChain, and the caller wants to return the last bucket found, do so.
         if (i + 1) < MAXCHAIN && b.next == nil && (opt & BUCKET_SEARCH_LAST_FOUND) != 0 {
             return b, BUCKET_STATUS_LAST_FOUND
         }
@@ -407,7 +417,8 @@ func (hdr *bucketHdr) add(t *maptype, h *hmap, key unsafe.Pointer, value unsafe.
             array := (*bucketArray)(hdr.bucket)
             hash :=  t.key.alg.hash(key, uintptr(array.seed))
             idx := hash % uintptr(array.size)
-            array.data[idx].add(t, h, key, value, array.size, equal)
+            newHdr := &(array.data[idx])
+            newHdr.add(t, h, key, value, array.size, equal)
             println(".........g #", g.goid, ": Moved a key with hash", uintptr(hash), "to idx", idx)
         default:
             println("Bad status: ", status)
@@ -447,7 +458,8 @@ func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer, size uint32, 
         next := b.next
         b.next = nil
         println("......g #", g.goid, ": Moved bucket ", b, " to index #", idx, "with hash: ", uintptr(hash))
-        (&array.data[idx]).claim(t, b)
+        newHdr := &array.data[idx]
+        newHdr.claim(t, b)
         b = next
     }
 
