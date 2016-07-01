@@ -16,9 +16,9 @@ const (
     MAXZERO = 1024 // must match value in ../cmd/compile/internal/gc/walk.go
     
     // The maximum amount of buckets in a bucketArray
-    MAXBUCKETS = 32
+    MAXBUCKETS = 16
     // The maximum amount of buckets in a bucketChain
-    MAXCHAIN = 16
+    MAXCHAIN = 8
 
     CHAINED = 0
     // bucketHdr's 'b' is a bucketArray. Note that once this is true, it always remains so.
@@ -99,6 +99,14 @@ type bucketArray struct {
 }
 
 /*
+    bucketData is a contiguous region of memory that contains all 
+*/
+type bucketData struct {
+    // Hash of the key-value corresponding to this index. If it is 0, it is empty. Aligned to cache line (64 bytes)
+    hash [MAXCHAIN]uintptr
+}
+
+/*
     bucketChain is a chain of buckets, wherein it acts as a simple single-linked list 
     of nodes of buckets. A bucketChain with a nil key is not in-use and is safe to be
     recycled, as access should be protected by a lock in the bucketHdr this belongs to.
@@ -125,6 +133,28 @@ func (chain *bucketChain) key(t *maptype) unsafe.Pointer {
     // The key offset is right at the end of the bucketChain
     keyOffset := uintptr(rawChain) + uintptr(cdataOffset)
     return unsafe.Pointer(keyOffset)
+}
+
+func (data *bucketData) key(t *maptype, idx uintptr) {
+    // Cast data to unsafe.Pointer to bypass Go's type system
+    rawData := unsafe.Pointer(data)
+    // The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAXCHAIN
+    keyOffset := uintptr(rawData) + uintptr(cdataOffset)
+    // Now the key at index 'idx' is located at idx * t.keysize
+    ourKeyOffset := keyOffset + idx * t.keysize
+    return unsafe.Pointer(ourKeyOffset)
+}
+
+func (data *bucketData) value(t *maptype, idx uintptr) {
+    // Cast data to unsafe.Pointer to bypass Go's type system
+    rawData := unsafe.Pointer(data)
+    // The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAXCHAIN
+    keyOffset := uintptr(rawData) + uintptr(cdataOffset)
+    // The array of values are located at the end of the array of keys, located at MAXCHAIN * t.keysize
+    valueOffset := keyOffset + MAXCHAIN * t.keysize
+    // Now the value at index 'idx' is located at idx * t.valuesize
+    ourValueOffset := valueOffset + idx * t.valuesize
+    return unsafe.Pointer(ourValueOffset)
 }
 
 func (chain *bucketChain) value(t *maptype) unsafe.Pointer {
@@ -168,10 +198,10 @@ func (chain *bucketChain) value(t *maptype) unsafe.Pointer {
 
 /*
     findBucket will find the requested bucket by it's key and return the associated
-    bucketHdr, allowing the caller to make further changes safely. It is also up to the
-    caller to relinquish the lock or update flags when they are finished.
+    bucketHdr, as well as the hash used to obtain the bucket, allowing the caller to make further changes safely. 
+    It is also up to the caller to relinquish the lock and/or update flags when they are finished.
 */
-func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) *bucketHdr {
+func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, uintptr, uintptr) {
     // Hash the key using bucketArray-specific seed to obtain index of header
     hash := t.key.alg.hash(key, uintptr(arr.seed))
     idx := hash % uintptr(arr.size)
@@ -191,7 +221,7 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) *bucketHdr {
             if spins > 0 {
                 println(".........g #", g.goid, ": wasted ", spins, " CPU cycles spinning")
             }
-            return &(arr.data[idx])
+            return &(arr.data[idx]), hash, arr.size
         }
 
         /*
@@ -474,6 +504,44 @@ func (hdr *bucketHdr) chainToArray(t *maptype, key unsafe.Pointer, size uint32, 
     }
 }
 
+func (hdr *bucketHdr) dataToArray(t *maptype, size uintptr, equal func (k1, k2 unsafe.Pointer) bool) {
+    g := getg().m.curg
+    println("...g #", g.goid, ": Converting bucketData to bucketArray")
+    array := (*bucketArray)(newobject(t.bucketarray))
+    array.init(t, size)
+    data := (*bucketData)(hdr.bucket)
+
+    // Move each bucketData to their respective cell in the bucketArray
+    for i := 0; i < MAXCHAIN; i++ {
+        key := data.key(t, i)
+        val := data.value(t, i)
+
+        // Rehash the key with the new seed
+        hash := t.key.alg.hash(key, uintptr(array.seed))
+        idx := hash % uintptr(array.size)
+        arrHdr := arr.data[idx]
+        arrData := (*bucketData)(arrHdr.bucket)
+
+        // This is the first insertion into this bucket, allocate
+        if arrData == nil {
+            arrHdr.bucket = (*bucketData)(newobject(t.BucketData))
+            arrData = (*bucketData)(arrHdr.bucket)
+
+            // Directly insert into map
+            arrData.assign(t, 0, hash, key, value)
+            continue
+        }
+
+        // Otherwise, we know this is not the first, so we need to scan for the first empty (after the first)
+        for j := 1; j < MAXCHAIN; j++ {
+            if arrData.hash[j] == 0 {
+                arrData.assign(t, j, hash, key, value)
+                break
+            }
+        }
+    }
+}
+
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
     println("Sizeof bucketHdr: ", unsafe.Sizeof(bucketHdr{}), "\nSizeof bucketArray: ", unsafe.Sizeof(bucketArray{}))
@@ -494,12 +562,107 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     return h
 }
 
+func (data *bucketData) assign(t *mapkey, idx, hash uintptr, key, value unsafe.Pointer) {
+    k := data.key(idx)
+    v := data.value(idx)
+
+    if t.indirectkey {
+        println(".........g #", getg().goid, ": Key is indirect")
+        kmem := newobject(t.key)
+        *(*unsafe.Pointer)(k) = kmem
+        k = kmem
+    }
+    if t.indirectvalue {
+        println(".........g #", getg().goid, ": Value is indirect")
+        vmem := newobject(t.elem)
+        *(*unsafe.Pointer)(v) = vmem
+        v = vmem
+    }
+
+    // Copies memory in a way that it updates the GC to know objects pointed to by this copy should not be collected
+    typedmemmove(t.key, k, key)
+    typedmemmove(t.elem, v, value)
+
+    data.hash[idx] = hash
+}
+
+// Assumes the index 'idx' key already matches the passed key
+func (data *bucketData) update(t *mapkey, idx uintptr, key, value unsafe.Pointer) {
+    v := data.value(t, idx)
+
+    // Indirect Key and Values need some indirection
+    if t.indirectvalue {
+        v = *(*unsafe.Pointer)(v)
+    }
+
+    // If we are required to update key, do so
+    if t.needkeyupdate {
+        k := data.key(t, idx)
+        if t.indirectkey {
+            k = *(*unsafe.Pointer)(k)
+        }
+        typedmemmove(t.key, k, key)
+    }
+
+    typedmemmove(t.elem, v, value)
+}
+
 func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
     g := getg().m.curg
     println("g #", g.goid, ": cmapassign1")
     cmap := (*concurrentMap)(h.chdr)
-    hdr := cmap.root.findBucket(t, key)
-    hdr.add(t, h, key, val, cmap.root.size, t.key.alg.equal)
+    hdr, hash, sz := cmap.root.findBucket(t, key)
+    
+    // If bucket is nil, then we allocate a new one.
+    if hdr.bucket == nil {
+        hdr.bucket = unsafe.Pointer(newobject(t.BucketData))
+        
+        // Since we just created a new bucket, directly add the key and value to the map
+        (*bucketData)(hdr.bucket).assign(t, hash, 0, key, val)
+        atomic.Xadd(&h.count, 1)
+        return
+    }
+
+    data := (*bucketData)(hdr.bucket)
+    firstEmpty := -1
+    // Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
+    for i := 0; i < MAXCHAIN {
+        currHash := data.hash[i]
+        // The hash is 0 if it is not in use
+        if currHash == 0 {
+            // Keep track of the first empty so we know what to assign into if we do not find a match
+            if firstEmpty == -1 {
+                firstEmpty = i
+            }
+            continue
+        }
+
+        // If the hash matches, check to see if keys are equal
+        if hash == data.hash[i] {
+            otherKey := data.key(t, i)
+
+            // If they are equal, update...
+            if t.alg.key.equal(key, otherKey) {
+                data.update(t, i, key, value)
+                return
+            }
+        }
+    }
+
+    // If firstEmpty is still -1, that means we did not find any empty slots, and should convert immediate
+    if firstEmpty == -1 {
+        // When we convert dataToArray, it's size is double the previous
+        hdr.dataToArray(t, sz * 2, t.key.alg.equal)
+
+        // After converting it from to a RECURSIVE array, we can release the lock to allow further concurrency.
+        maprelease()
+        
+        // Also we can save effort by just recursively calling this again.
+        cmapassign1(t, h, key, val)
+    }
+
+    // At this point, firstEmpty is guaranteed to be non-zero, hence we can safely assign it
+    data.assign(t, firstEmpty, hash, key, value)
 }
 
 func maprelease() {
@@ -580,21 +743,30 @@ func cmapaccess2_faststr(t *maptype, h *hmap, key string) (unsafe.Pointer, bool)
 // The primary cmapaccess function
 func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) (unsafe.Pointer, bool) {
     cmap := (*concurrentMap)(h.chdr)
-    hdr := cmap.root.findBucket(t, key)
-    bucket, status := hdr.findBucket(t, key, BUCKET_SEARCH_DEFAULT, equal)
+    hdr, hash, _ := cmap.root.findBucket(t, key)
 
-    switch status {
-        // If we did find it, simply return the value (after any necessary indirection)
-        case BUCKET_STATUS_FOUND:
-            retval := bucket.value(t)
-            if t.indirectvalue {
-                retval = *(*unsafe.Pointer)(retval)
-            }       
-            return retval, true
-        // By default, the specification states we must return a nil
-        default:
-            return unsafe.Pointer(&DUMMY_RETVAL[0]), false
+    // If the bucket is nil, then it is empty, stop here
+    if hdr.bucket == nil {
+        return unsafe.Pointer(&DUMMY_RETVAL[0]), false
     }
+
+    data := (*bucketData)(hdr.bucket)
+    for i := 0; i < MAXCHAIN; i++ {
+        currHash := data.hash[i]
+        
+        // Check if the hashes are equal
+        if currHash == hash {
+            otherKey := data.key(t, i)
+
+            // If the keys are equal
+            if equal(key, otherKey) {
+                return data.value(t, i), true
+            }
+        }
+    }
+
+    // Only get to this point if we have not found the value in the map
+    return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 }
 
 

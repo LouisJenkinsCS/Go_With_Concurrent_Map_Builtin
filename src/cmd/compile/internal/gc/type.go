@@ -173,6 +173,7 @@ type MapType struct {
 	BucketArray *Type // internal struct type representing a concurrent map bucketArray (optional)
 	BucketChain *Type // internal struct type representing a concurrent map bucketChain (optional)
 	BucketHdr *Type // internal struct type representing a concurrent map bucketHdr (optional)
+	BucketData *Type // internal struct type representing a concurrnet map bucketData (optional)
 }
 
 // MapType returns t's extra map-specific fields.

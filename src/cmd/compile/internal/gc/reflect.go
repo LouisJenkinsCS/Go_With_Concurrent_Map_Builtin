@@ -282,6 +282,50 @@ func bucketChain(t *Type) *Type {
 	return bchain
 }
 
+func bucketData(t *Type) *Type {
+	if t.MapType().BucketData != nil {
+		return t.MapType().BucketData
+	}
+
+	bdata := typ(TSTRUCT)
+	bdata.Noalg = true
+
+	// Must match MAXCHAIN
+	nChains := 8
+
+	keytype := t.Key()
+	valtype := t.Val()
+	dowidth(keytype)
+	dowidth(valtype)
+
+	// If the key or value size is greater than the maximum key/val size, we take it by reference.
+	if keytype.Width > MAXKEYSIZE {
+		keytype = Ptrto(keytype)
+	}
+	if valtype.Width > MAXVALSIZE {
+		valtype = Ptrto(valtype)
+	}
+
+
+	keyArr := typArray(keytype, nChains)
+	valArr := typeArray(valtype, nChains)
+	keyArr.Noalg = true
+	valArr.Noalg = true
+
+	var field [3]*Field
+	field[0] = makefield("hash", typArray(Types[TUINTPTR], nChains))
+	field[1] = makefield("keys", keyArr)
+	field[2] = makefield("values", valArr)
+
+	bdata.SetFields(field[:])
+	dowidth(bdata)
+	bdata.Local = t.Local
+	t.MapType().BucketData = bdata
+	bdata.StructType().Map = t
+
+	return bdata
+}
+
 func bucketHdr(t *Type) *Type {
 	if t.MapType().BucketHdr != nil {
 		return t.MapType().BucketHdr
@@ -1348,6 +1392,7 @@ ok:
 		s6 := dtypesym(bucketArray(t))
 		s7 := dtypesym(bucketChain(t))
 		s8 := dtypesym(bucketHdr(t))
+		s9 := dtypesym(bucketData(t))
 
 		ot = dcommontype(s, ot, t)
 		ot = dsymptr(s, ot, s1, 0)
@@ -1379,6 +1424,7 @@ ok:
 		ot = dsymptr(s, ot, s6, 0)
 		ot = dsymptr(s, ot, s7, 0)
 		ot = dsymptr(s, ot, s8, 0)
+		ot = dsymptr(s, ot, s9, 0)
 
 		ot = dextratype(s, ot, t, 0)
 
