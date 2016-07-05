@@ -356,8 +356,8 @@ type maptype struct {
 	// L.J: Concurrent Map
 	concurrentmap *_type
 	bucketarray *_type
-	bucketchain *_type
 	buckethdr *_type
+	bucketdata *_type
 }
 
 type arraytype struct {

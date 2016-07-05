@@ -701,8 +701,8 @@ func typefmt(t *Type, flag FmtFlag) string {
 				return "map.bucketarray[" + m.Key().String() + "]" + m.Val().String()
 			}
 
-			if mt.BucketChain == t {
-				return "map.bucketchain[" + m.Key().String() + "]" + m.Val().String()
+			if mt.BucketData == t {
+				return "map.bucketdata[" + m.Key().String() + "]" + m.Val().String()
 			}
 
 			if mt.BucketHdr == t {
