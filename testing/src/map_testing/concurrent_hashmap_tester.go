@@ -1,6 +1,6 @@
 package map_testing
 
-import "../github.com/pkg/profile"
+import _ "../github.com/pkg/profile"
 import "log"
 import "time"
 
@@ -9,6 +9,7 @@ func populate_map_struct(m map[point]point) {
 		go func (idx int) { 
 			for j := 0; j < COLS; j++ {
 				key, val := point{idx, j, 0}, point{ROWS - idx, COLS - j, 0}
+				m[key] = point{0, 0, 0}
 				m[key] = val
 			}
 			c <- 0
@@ -22,7 +23,7 @@ func TestConcurrentMap() {
 	c = make(chan int)
 	log.Println("Populating Concurrent Map")
 
-	prof := profile.Start(profile.CPUProfile, profile.ProfilePath("."));
+	// prof := profile.Start(profile.CPUProfile, profile.ProfilePath("."));
 	// memProf := profile.Start(profile.MemProfile, profile.ProfilePath("."));
 	start := time.Now()
 	populate_map_struct(m)
@@ -30,9 +31,9 @@ func TestConcurrentMap() {
 		<- c
 	}
 
-	// memProf.Stop()
 	end := time.Since(start)
-	prof.Stop()
+	// memProf.Stop()
+	// prof.Stop()
 	log.Println("Concurrent Map Time: ", end)
 
     log.Println("Testing Concurrent Map accuracy")

@@ -390,7 +390,6 @@ type mapType struct {
 	// L.J: Concurrent Map
 	concurrentmap *rtype
 	bucketarray *rtype
-	bucketchain *rtype
 	buckethdr *rtype
 	bucketdata *rtype
 }

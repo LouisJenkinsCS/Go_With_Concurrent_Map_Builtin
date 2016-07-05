@@ -7,6 +7,6 @@ type point struct {
 }
 
 const (
-    ROWS = 100
-    COLS = 100
+    ROWS = 1000
+    COLS = 1000
 )

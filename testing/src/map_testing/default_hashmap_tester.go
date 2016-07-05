@@ -3,7 +3,7 @@ package map_testing
 import "sync"
 import "log"
 import "time"
-import "../github.com/pkg/profile"
+import _ "../github.com/pkg/profile"
 
 var mtx sync.Mutex
 
@@ -16,6 +16,7 @@ func populate_map_sync_struct(m map[point]point) {
 				// val := fmt.Sprintf("{%v, %v}", idx, j)
 				key, val := point{idx, j, 0}, point{ROWS - idx, COLS - j, 0}
 				mtx.Lock()
+				m[key] = point{0, 0, 0}
 				m[key] = val
 				mtx.Unlock()
 			}
@@ -31,7 +32,7 @@ func TestDefaultMap() {
 	
 	log.Println("Populating Default Map")
 	// cpuProf := profile.Start(profile.CPUProfile, profile.ProfilePath("."));
-	memProf := profile.Start(profile.MemProfile, profile.ProfilePath("."));
+	// memProf := profile.Start(profile.MemProfile, profile.ProfilePath("."));
 	start := time.Now()
 	populate_map_sync_struct(m)
 	for i := 0; i < ROWS; i++ {
@@ -39,7 +40,7 @@ func TestDefaultMap() {
 	}
 	end := time.Since(start)
 	// cpuProf.Stop()
-	memProf.Stop()
+	// memProf.Stop()
 	log.Println("Default Map Time: ", end)
 
 	log.Println("Testing Default Map accuracy")
