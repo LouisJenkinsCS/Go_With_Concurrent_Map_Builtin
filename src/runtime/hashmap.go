@@ -587,7 +587,8 @@ done:
 
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
+		cmapdelete(t, h, key)
+		return
 	}
 
 	if raceenabled && h != nil {
