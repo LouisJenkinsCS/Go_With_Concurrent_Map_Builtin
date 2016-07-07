@@ -217,9 +217,10 @@ func hiter(t *Type) *Type {
 	//    stuff uintptr
 	//    bucket uintptr
 	//    checkBucket uintptr
+	//    citerHdr *concurrentIterator
 	// }
 	// must match ../../../../runtime/hashmap.go:hiter.
-	var field [12]*Field
+	var field [13]*Field
 	field[0] = makefield("key", Ptrto(t.Key()))
 	field[1] = makefield("val", Ptrto(t.Val()))
 	field[2] = makefield("t", Ptrto(Types[TUINT8]))
@@ -232,18 +233,40 @@ func hiter(t *Type) *Type {
 	field[9] = makefield("stuff", Types[TUINTPTR]) // offset+wrapped+B+I
 	field[10] = makefield("bucket", Types[TUINTPTR])
 	field[11] = makefield("checkBucket", Types[TUINTPTR])
+	field[12] = makefield("citerHdr", Ptrto(concurrentIterator(t))) // Concurrent iterator header
 
 	// build iterator struct holding the above fields
 	i := typ(TSTRUCT)
 	i.Noalg = true
 	i.SetFields(field[:])
 	dowidth(i)
-	if i.Width != int64(12*Widthptr) {
-		Yyerror("hash_iter size not correct %d %d", i.Width, 12*Widthptr)
+	if i.Width != int64(13*Widthptr) {
+		Yyerror("hash_iter size not correct %d %d", i.Width, 13*Widthptr)
 	}
 	t.MapType().Hiter = i
 	i.StructType().Map = t
 	return i
+}
+
+func concurrentIterator(t *Type) *Type {
+	if t.MapType().ConcurrentIterator != nil {
+		return t.MapType().ConcurrentIterator
+	}
+	
+	var field [4]*Field
+	field[0] = makefield("idx", typSlice(Types[TUINTPTR]))
+	field[1] = makefield("offset", Types[TUINTPTR])
+	field[2] = makefield("array", Ptrto(bucketArray(t)))
+	field[3] = makefield("data", bucketData(t))
+
+	citer := typ(TSTRUCT)
+	citer.Noalg = true
+	citer.SetFields(field[:])
+	dowidth(citer)
+	t.MapType().ConcurrentIterator = citer
+	citer.StructType().Map = t
+
+	return citer
 }
 
 func bucketData(t *Type) *Type {
@@ -315,13 +338,15 @@ func bucketArray(t *Type) *Type {
 		return t.MapType().BucketArray
 	}
 
-	var field [3]*Field
+	barr := typ(TSTRUCT)
+	barr.Noalg = true
+
+	var field [4]*Field
 	field[0] = makefield("data", typSlice(bucketHdr(t)))
 	field[1] = makefield("seed", Types[TUINT32])
 	field[2] = makefield("size", Types[TUINT32])
+	field[3] = makefield("backlink", Types[TUNSAFEPTR])
 
-	barr := typ(TSTRUCT)
-	barr.Noalg = true
 	barr.SetFields(field[:])
 	dowidth(barr)
 	t.MapType().BucketArray = barr
@@ -1356,6 +1381,7 @@ ok:
 		s6 := dtypesym(bucketArray(t))
 		s7 := dtypesym(bucketHdr(t))
 		s8 := dtypesym(bucketData(t))
+		s9 := dtypesym(concurrentIterator(t))
 
 		ot = dcommontype(s, ot, t)
 		ot = dsymptr(s, ot, s1, 0)
@@ -1387,6 +1413,7 @@ ok:
 		ot = dsymptr(s, ot, s6, 0)
 		ot = dsymptr(s, ot, s7, 0)
 		ot = dsymptr(s, ot, s8, 0)
+		ot = dsymptr(s, ot, s9, 0)
 
 		ot = dextratype(s, ot, t, 0)
 

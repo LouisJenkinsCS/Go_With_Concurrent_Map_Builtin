@@ -73,6 +73,8 @@ type bucketArray struct {
     seed uint32
     // Size of the current slice of bucketHdr's
     size uint32
+    // Pointer to the previous bucketArray, if nested; used by iterator
+    backlink *bucketArray
 }
 
 /*
@@ -91,6 +93,17 @@ type bucketData struct {
 type concurrentMap struct {
     // Embedded to be contiguous in memory
     root bucketArray
+}
+
+type concurrentIterator struct {
+    // Every time we recurse, we store the previous index here; top refers to current
+    idx []uintptr
+    // Offset we are inside of the bucketData
+    offset uintptr
+    // The current bucketArray were are iterating on
+    array *bucketArray
+    // Copy of the current bucketData we are on
+    data bucketData
 }
 
 func (data *bucketData) key(t *maptype, idx uintptr) unsafe.Pointer {
@@ -331,6 +344,192 @@ func (hdr *bucketHdr) dataToArray(t *maptype, size uintptr, equal func (k1, k2 u
     }
 }
 
+func (it *concurrentIterator) nextKeyValue(t *maptype) (unsafe.Pointer, unsafe.Pointer) {
+    for ; it.offset < MAXCHAIN; it.offset++ {
+        // If the hash is 0, then it is not in use.
+        if it.data.hash[it.offset] == 0 {
+            continue
+        }
+
+        // TODO: Potentially scan the map again to see if the key has been deleted
+
+        // Perform necessary indirection on key and value if needed
+        k := it.data.key(t, it.offset)
+        if t.indirectkey {
+            k = *(*unsafe.Pointer)(k)
+        }
+
+        v := it.data.value(t, it.offset)
+        if t.indirectvalue {
+            v = *(*unsafe.Pointer)(v)
+        }
+
+        // Increment the offset so next call is updated to retrieve next
+        it.offset++
+
+        return k, v
+    }
+
+    // If we find nothing, we return nothing
+    return nil, nil
+}
+
+/*
+    Obtains the next bucketData in this bucketArray. Each time we recurse, we must store
+    the previous 
+*/
+func (it *concurrentIterator) nextBucket(t *maptype) bool {
+    // The current index we are on is the top; idxPtr is kept to easily allow mutation.
+    idxPtr := &it.idx[len(it.idx)-1]
+    idx := *idxPtr
+    
+    // If the index is equal to array.size (out of bounds), then we exhausted all buckets here.
+    if idx == uintptr(it.array.size) {
+        // If it is not possible to go back, we have iterated over the entire map
+        if it.array.backlink == nil {
+            it.array = nil
+            return false
+        }
+
+        // If we can, traverse through the backlink and pop off this idx from the stack
+        it.array = it.array.backlink
+        it.idx = it.idx[:len(it.idx)-1]
+
+        // Recursively evaluate the next bucket (saves effort on our part)
+        return it.nextBucket(t)
+    }
+
+    hdr := &it.array.data[idx]
+    var data *bucketData
+    spins := 0
+    (*idxPtr)++
+
+    // Find the next appropriate bucketData
+    for {
+        // A simple CAS can be used to attempt to acquire the lock. If it is an ARRAY, this will always fail, as the flag will never be 0 again.
+        if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+            // println("......g #", g.goid, ":  iterator acquired lock")
+            if spins > 0 {
+                // println(".........g #", g.goid, ": iterator wasted ", spins, " CPU cycles spinning")
+            }
+            
+            // We have the bucket we want
+            data = (*bucketData)(hdr.bucket)
+            break
+        }
+
+        flags := atomic.Loaduintptr(&hdr.info)
+
+        // This can never be locked again after converted to array, so completely safe.
+        if (flags & LOCKED) != 0 {
+            spins++
+            Gosched()
+            continue
+        }
+
+        // At this point, we know that it isn't LOCKED, and if it is ARRAY, then it will remain that way.
+        if (flags & ARRAY) != 0 {
+            // Sanity check for if a thread locked it after we loaded flags
+            if !atomic.Casuintptr(&hdr.info, flags, flags) {
+                spins++
+                Gosched()
+                continue
+            }
+
+            if spins > 0 {
+                // println("...g #", g.goid, ": Iterator recursing through nested array after spinning ", spins, "waiting for allocation")
+            }
+            
+            // Set the backlink in case it wasn't already, and setup safe recursive traversal
+            oldArray := it.array
+            it.array = (*bucketArray)(hdr.bucket)
+            it.array.backlink = oldArray
+            it.idx = append(it.idx, 0)
+            
+            // Now recurse to reduce needed work
+            return it.nextBucket(t)
+        }
+
+        spins++
+        Gosched()
+    }
+
+    // if the bucket is nil, then it's empty, move on to the next, recursively to save work
+    if data == nil {
+        // Atomically release lock
+        for {
+            oldFlags := atomic.Loaduintptr(&hdr.info)
+            if atomic.Casuintptr(&hdr.info, oldFlags, uintptr(oldFlags &^ LOCKED)) {
+                break
+            }
+        }
+
+        // Now recurse to reduce needed work
+        return it.nextBucket(t)
+    }
+
+    // If data is not nil, then we make and operate on a simple bucketCopy
+    typedmemmove(t.bucketdata, unsafe.Pointer(&it.data), unsafe.Pointer(data))
+
+    // Atomically release lock
+    for {
+        oldFlags := atomic.Loaduintptr(&hdr.info)
+        if atomic.Casuintptr(&hdr.info, oldFlags, uintptr(oldFlags &^ LOCKED)) {
+            break
+        }
+    }
+
+    return true
+}
+
+func (it *concurrentIterator) init(t *maptype, h *hmap) {
+    cmap := (*concurrentMap)(h.chdr)
+    it.idx = make([]uintptr, 1)
+    it.array = &cmap.root
+
+    // A call to nextBucket() will automatically setup the bucket needed
+    it.nextBucket(t)
+}
+
+func cmapiterinit(t *maptype, h *hmap, it *hiter) {
+    // You cannot iterate a nil or empty map
+    if h == nil || atomic.Load((*uint32)(unsafe.Pointer(&h.count))) == 0 {
+        it.key = nil
+        it.value = nil
+        return
+    }
+
+    it.t = t
+    it.h = h
+    
+    citer := (*concurrentIterator)(newobject(t.concurrentiterator))
+    citer.init(t, h)
+    it.citerHdr = unsafe.Pointer(citer)
+    cmapiternext(it)
+}
+
+func cmapiternext(it *hiter) {
+    citer := (*concurrentIterator)(it.citerHdr)
+    for {
+        k, v := citer.nextKeyValue(it.t)
+        
+        // If k == nil, then there is no next Key or Value in this bucketData, so retrieve next.
+        if k == nil {
+            citer.offset = 0
+            // If there is no nextBucket, then we are finished; mark key and value to be nil
+            if !citer.nextBucket(it.t) {
+                it.key = nil
+                it.value = nil
+                return
+            }
+            continue
+        }
+        it.key = k
+        it.value = v
+        return
+    }
+}
+
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     // println("Inside of makecmap: Key: ", t.key.string(), "; Value: ", t.elem.string())
     // println("Sizeof bucketHdr: ", unsafe.Sizeof(bucketHdr{}), "\nSizeof bucketArray: ", unsafe.Sizeof(bucketArray{}))
@@ -403,7 +602,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
         maprelease()
         
         // Also we can save effort by just recursively calling this again.
-        cmapassign1(t, h, key, val)
+        cmapassign1(t, h, key, val)  
         return
     }
 
@@ -546,10 +745,23 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
     hdr, hash, _ := cmap.root.findBucket(t, key)
     data := (*bucketData)(hdr.bucket)
 
+    if data == nil {
+        return
+    }
+
+    // Number of buckets empty; used to signify whether or not we should delete this bucket when we finish.
+    isEmpty := MAXCHAIN
     for i := 0; i < MAXCHAIN; i++ {
         currHash := data.hash[i]
 
-        // If the hash matches, we can compare 
+        if currHash == 0 {
+            continue
+        }
+
+        // If there is a hash that is not 0, then the bucket is not empty
+        isEmpty--
+
+        // If the hash matches, we can compare
         if currHash == hash {
             otherKey := data.key(t, uintptr(i))
 
@@ -566,9 +778,24 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
                 // Hahs of 0 marks bucket at empty and reusable
                 data.hash[i] = 0
                 atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), -1)
-                return
+                isEmpty++
+
+                // We save time by directly looping through the rest of the hashes to determine if there are other non-empty indice, besides this one, if we haven't found one already
+                for j := i + 1; isEmpty == MAXCHAIN && j < MAXCHAIN; j++ {
+                    // If it is not empty, we decrement the count of empty index
+                    if data.hash[j] != 0 {
+                        isEmpty--
+                    }
+                }
+                break
             }
         }
     }
+
+    // If isEmpty == MAXCHAIN, then there are no indice still in use, so we delete the bucket to allow the iterator an easier time
+    if isEmpty == MAXCHAIN {
+        hdr.bucket = nil
+    }
+    
 }
 

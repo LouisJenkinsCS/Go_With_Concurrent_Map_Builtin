@@ -9,9 +9,9 @@ type point struct {
 }
 
 const (
-    ROWS = 4
-    COLS = 1000000
-    TESTS = 1
+    ROWS = 8
+    COLS = 10000
+    TESTS = 100
 )
 
 func test_map_insertion_accuracy(m map[point]point) {

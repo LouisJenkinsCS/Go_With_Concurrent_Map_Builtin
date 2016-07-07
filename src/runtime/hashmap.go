@@ -158,6 +158,7 @@ type hiter struct {
 	i           uint8
 	bucket      uintptr
 	checkBucket uintptr
+	citerHdr unsafe.Pointer // Concurrent Map Iterator Header
 }
 
 func evacuated(b *bmap) bool {
@@ -653,10 +654,6 @@ done:
 }
 
 func mapiterinit(t *maptype, h *hmap, it *hiter) {
-	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
-	}
-
 	// Clear pointer fields so garbage collector does not complain.
 	it.key = nil
 	it.value = nil
@@ -666,6 +663,12 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 	it.bptr = nil
 	it.overflow[0] = nil
 	it.overflow[1] = nil
+	it.citerHdr = nil
+
+	if h != nil && (h.flags & concurrent) != 0 {
+		cmapiterinit(t, h, it)
+		return
+	}
 
 	if raceenabled && h != nil {
 		callerpc := getcallerpc(unsafe.Pointer(&t))
@@ -678,7 +681,7 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 		return
 	}
 
-	if unsafe.Sizeof(hiter{})/sys.PtrSize != 12 {
+	if unsafe.Sizeof(hiter{})/sys.PtrSize != 13 {
 		throw("hash_iter size incorrect") // see ../../cmd/internal/gc/reflect.go
 	}
 	it.t = t
@@ -722,7 +725,8 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 func mapiternext(it *hiter) {
 	h := it.h
 	if (h.flags & concurrent) != 0 {
-		throw("Concurrent Access Provided!")
+		cmapiternext(it)
+		return
 	}
 
 	if raceenabled {

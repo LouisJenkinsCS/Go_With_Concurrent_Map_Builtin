@@ -358,6 +358,7 @@ type maptype struct {
 	bucketarray *_type
 	buckethdr *_type
 	bucketdata *_type
+	concurrentiterator *_type
 }
 
 type arraytype struct {

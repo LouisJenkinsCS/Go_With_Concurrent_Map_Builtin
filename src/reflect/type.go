@@ -392,6 +392,7 @@ type mapType struct {
 	bucketarray *rtype
 	buckethdr *rtype
 	bucketdata *rtype
+	concurrentiterator *rtype
 }
 
 // ptrType represents a pointer type.

@@ -2,63 +2,63 @@ package map_testing
 
 import "sync"
 import "fmt"
-import "time"
 import "math/rand"
+import "time"
 import _ "../github.com/pkg/profile"
 
-var mtx sync.Mutex
+var rwlock sync.RWMutex
 
-var c chan int
+var rwc chan int
 
-func populate_map_sync_struct(m map[point]point) {
+func populate_map_rw_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
 		go func (idx int) { 
 			for j := 0; j < COLS; j++ {
 				// val := fmt.Sprintf("{%v, %v}", idx, j)
 				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
-				mtx.Lock()
+				rwlock.Lock()
 				// Adds a dummy value to test assignment
 				m[key] = point{0, 0}
 				// Adds real value to test update
 				m[key] = val
-				mtx.Unlock()
+				rwlock.Unlock()
 			}
 			c <- 0
 		}(i)
 	}
 }
 
-func delete_map_sync_struct(m map[point]point) {
+func delete_map_rw_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
 		go func (idx int) {
 			for j := 0; j < COLS; j++ {
 				key := point{idx, j}
-				mtx.Lock()
+				rwlock.Lock()
 				delete(m, key)
-				mtx.Unlock()
+				rwlock.Unlock()
 			}
 			c <- 0
 		}(i)
 	}
 }
 
-func iterate_map_sync_struct(m map[point]point) {
+func iterate_map_rw_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
 		go func () {
-			mtx.Lock()
+			rwlock.RLock()
 			for k, v := range m {
 				expected := point{ROWS - k.x, COLS - k.y}
 				if v != expected {
 					panic(fmt.Sprintf("Expected %v for key %v, but received %v", expected, k, v))
 				}
 			}
-			mtx.Unlock()
+			rwlock.RUnlock()
 			c <- 0
 		}()
 	}
 }
 
-func test_map_insertion_accuracy_sync(m map[point]point) {
+func test_map_insertion_accuracy_rw(m map[point]point) {
     passed := true
     c := make(chan int)
 	for i := 0; i < ROWS; i++ {
@@ -66,9 +66,9 @@ func test_map_insertion_accuracy_sync(m map[point]point) {
             for j := 0; j < COLS; j++ {
                 key := point{idx, j}
                 val := point{ROWS - idx, COLS - j}
-				mtx.Lock()
+				rwlock.RLock()
                 retval := m[key]
-				mtx.Unlock()
+				rwlock.RUnlock()
                 if retval != val {
                     fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
                     passed = false
@@ -87,7 +87,7 @@ func test_map_insertion_accuracy_sync(m map[point]point) {
     }
 }
 
-func test_map_deletion_accuracy_sync(m map[point]point) {
+func test_map_deletion_accuracy_rw(m map[point]point) {
     passed := true
     c := make(chan int)
     for i := 0; i < ROWS; i++ {
@@ -95,9 +95,9 @@ func test_map_deletion_accuracy_sync(m map[point]point) {
             for j := 0; j < COLS; j++ {
                 key := point{idx, j}
                 val := point{0, 0}
-				mtx.Lock()
+				rwlock.Lock()
                 retval := m[key]
-				mtx.Unlock()
+			    rwlock.Unlock()
                 if retval != val {
                     fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
                     passed = false
@@ -116,7 +116,7 @@ func test_map_deletion_accuracy_sync(m map[point]point) {
     }
 }
 
-func all_map_struct_sync(m map[point]point) {
+func all_map_struct_rw(m map[point]point) {
 	iteration_modulo, retrieve_modulo, delete_modulo := 103, 5, 7
 
 	// We spawn ROWS Goroutines
@@ -130,17 +130,19 @@ func all_map_struct_sync(m map[point]point) {
 				r := rand.Int()
 				// The operation is done at random
 				start := time.Now()
-				mtx.Lock()
 				if r % iteration_modulo == 0 {
+					rwlock.RLock()
 					for k, v := range m {
 						expected := point{ROWS - k.x, COLS - k.y}
 						if v != expected {
-							panic(fmt.Sprintf("[Synchronized Map] Expected %v for key %v, but received %v", expected, k, v))
+							panic(fmt.Sprintf("[ReaderWriter Map] Expected %v for key %v, but received %v", expected, k, v))
 						}
 					}
 					timeIterating += time.Since(start)
 					iterations++
+					rwlock.RUnlock()
 				} else if r % retrieve_modulo == 0 {
+					rwlock.RLock()
 					key := point{idx, lastAdded}
 					expected := point{0, 0}
 					retval := m[key]
@@ -149,35 +151,39 @@ func all_map_struct_sync(m map[point]point) {
 						expected = point{ROWS - idx, COLS - lastAdded}
 					}
 					if retval != expected {
-						panic(fmt.Sprintf("[Synchronized Map] Key: %v;Expected: %v;Found: %v\n", key, expected, retval))
+						panic(fmt.Sprintf("[ReaderWriter Map] Key: %v;Expected: %v;Found: %v\n", key, expected, retval))
 					}
 					timeRetrieving += time.Since(start)
 					retrieves++
+					rwlock.RUnlock()
 				} else if r % delete_modulo == 0 {
+					rwlock.Lock()
 					if lastAdded != -1 {
 						delete(m, point{ROWS - idx, COLS - lastAdded})
 						deletes++
 					}
 					timeDeleting += time.Since(start)
 					lastAdded = -1
+					rwlock.Unlock()
 				} else {
+					rwlock.Lock()
 					k := point{idx, j}
 					v := point{ROWS - idx, COLS - j}
 					m[k] = v
 					lastAdded = j
 					timeAdding += time.Since(start)
 					adds++
+					rwlock.Unlock()
 				}
-				mtx.Unlock()
 			}
-			fmt.Printf("[Synchronized Map]\nInsertion { Time: %v; Operations: %v }\nRetrieve { Time: %v; Operations: %v }\nDelete { Time: %v; Operations: %v }\nIteration { Time: %v; Operations: %v }\n\n\n",
+			fmt.Printf("[ReaderWriter Map]\nInsertion { Time: %v; Operations: %v }\nRetrieve { Time: %v; Operations: %v }\nDelete { Time: %v; Operations: %v }\nIteration { Time: %v; Operations: %v }\n\n\n",
 				timeAdding, adds, timeRetrieving, retrieves, timeDeleting, deletes, timeIterating, iterations)
 			c <- 0
 		}(i)
 	}
 }
 
-func TestDefaultMap() {
+func TestRWLockMap() {
 	m := make(map[point]point)
 	c = make(chan int)
 	insertTime := make([]time.Duration, TESTS)
@@ -185,19 +191,19 @@ func TestDefaultMap() {
 	retrieveTime := make([]time.Duration, TESTS * 2)
 	iterationTime := make([]time.Duration, TESTS)
 
-	all_map_struct_sync(m)
+	all_map_struct_rw(m)
     for i := 0; i < ROWS; i++ {
         <- c
     }
-	fmt.Printf("[Synchronized Map] Successfully completed the all_map_struct test!")
+	fmt.Printf("[ReaderWriter Map] Successfully completed the all_map_struct test!")
 	if TESTS == 0 {
 		return
 	}
 	
 	for iterations := 0; iterations < TESTS; iterations++ {
-		// log.Printf("[Synchronized Map] ~Trial #%v~ Populating with %v elements...", iterations + 1, ROWS * COLS)
+		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Populating with %v elements...", iterations + 1, ROWS * COLS)
 		start := time.Now()
-		populate_map_sync_struct(m)
+		populate_map_rw_struct(m)
 		for i := 0; i < ROWS; i++ {
 			<- c
 		}
@@ -206,39 +212,39 @@ func TestDefaultMap() {
 		insertTime[iterations] = end
 		// memProf.Stop()
 		// prof.Stop()
-		// log.Printf("[Synchronized Map] ~Trial #%v~ Insertion Time: %v\n", iterations + 1, end)
+		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Insertion Time: %v\n", iterations + 1, end)
 
-		// log.Printf("[Synchronized Map] ~Trial #%v~ Testing Insertion Accuracy...", iterations + 1)
+		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Testing Insertion Accuracy...", iterations + 1)
 		start = time.Now()
-		test_map_insertion_accuracy_sync(m)
+		test_map_insertion_accuracy_rw(m)
 		end = time.Since(start)
 		retrieveTime[iterations * 2] = end
 
 		start = time.Now()
-		iterate_map_sync_struct(m)
+		iterate_map_rw_struct(m)
 		for i := 0; i < ROWS; i++ {
 			<- c
 		}
 		end = time.Since(start)
 		iterationTime[iterations] = end
 
-		// log.Printf("[Synchronized Map] ~Trial #%v~ Deleting all %v elements...", iterations + 1, ROWS * COLS)
+		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Deleting all %v elements...", iterations + 1, ROWS * COLS)
 		start = time.Now()
-		delete_map_sync_struct(m)
+		delete_map_rw_struct(m)
 		for i := 0; i < ROWS; i++ {
 			<- c
 		}
 		end = time.Since(start)
 		deleteTime[iterations] = end
 
-		// log.Printf("[Synchronized Map] ~Trial #%v~ Testing Deletion Accuracy...", iterations + 1)
+		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Testing Deletion Accuracy...", iterations + 1)
 		start = time.Now()
-		test_map_deletion_accuracy_sync(m)
+		test_map_deletion_accuracy_rw(m)
 		end = time.Since(start)
 		retrieveTime[(iterations * 2) + 1] = end
 	}
-	fmt.Printf("[Synchronized Map] Average Insertion Time: %v\n", averageTime(insertTime))
-	fmt.Printf("[Synchronized Map] Average Retrieval Time: %v\n", averageTime(retrieveTime))
-	fmt.Printf("[Synchronized Map] Average Deletion Time: %v\n", averageTime(deleteTime))
-	fmt.Printf("[Synchronized Map] Average Iteration Time: %v\n", averageTime(iterationTime))
+	fmt.Printf("[ReaderWriter Map] Average Insertion Time: %v\n", averageTime(insertTime))
+	fmt.Printf("[ReaderWriter Map] Average Retrieval Time: %v\n", averageTime(retrieveTime))
+	fmt.Printf("[ReaderWriter Map] Average Deletion Time: %v\n", averageTime(deleteTime))
+	fmt.Printf("[ReaderWriter Map] Average Iteration Time: %v\n", averageTime(iterationTime))
 }

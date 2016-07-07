@@ -173,6 +173,7 @@ type MapType struct {
 	BucketArray *Type // internal struct type representing a concurrent map bucketArray (optional)
 	BucketHdr *Type // internal struct type representing a concurrent map bucketHdr (optional)
 	BucketData *Type // internal struct type representing a concurrnet map bucketData (optional)
+	ConcurrentIterator *Type // internal struct type representing a concurrent map iterator (optional)
 }
 
 // MapType returns t's extra map-specific fields.
@@ -1026,6 +1027,7 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 			if c := t1.Sym.cmpsym(x1.Sym); c != ssa.CMPeq {
 				return c
 			}
+
 			if c := t1.Type.cmp(x1.Type); c != ssa.CMPeq {
 				return c
 			}
