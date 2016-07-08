@@ -252,11 +252,27 @@ func concurrentIterator(t *Type) *Type {
 	if t.MapType().ConcurrentIterator != nil {
 		return t.MapType().ConcurrentIterator
 	}
+
+	/*
+		type pos struct {
+			idx uintptr
+			arr *bucketArray
+		}
+
+		Used to keep track of the current bucketArray and index we are iterating in
+	*/
+	pos := typ(TSTRUCT)
+	pos.Noalg = true
+	var posField [2]*Field
+	posField[0] = makefield("idx", Types[TUINTPTR])
+	posField[1] = makefield("arr", Ptrto(bucketArray(t)))
+	pos.SetFields(posField[:])
+	dowidth(pos)
 	
 	var field [4]*Field
-	field[0] = makefield("idx", typSlice(Types[TUINTPTR]))
-	field[1] = makefield("offset", Types[TUINTPTR])
-	field[2] = makefield("array", Ptrto(bucketArray(t)))
+	field[0] = makefield("startPos", typSlice(pos))
+	field[1] = makefield("stackPos", typSlice(pos))
+	field[2] = makefield("offset", Types[TUINTPTR])
 	field[3] = makefield("data", bucketData(t))
 
 	citer := typ(TSTRUCT)
@@ -345,7 +361,6 @@ func bucketArray(t *Type) *Type {
 	field[0] = makefield("data", typSlice(bucketHdr(t)))
 	field[1] = makefield("seed", Types[TUINT32])
 	field[2] = makefield("size", Types[TUINT32])
-	field[3] = makefield("backlink", Types[TUNSAFEPTR])
 
 	barr.SetFields(field[:])
 	dowidth(barr)

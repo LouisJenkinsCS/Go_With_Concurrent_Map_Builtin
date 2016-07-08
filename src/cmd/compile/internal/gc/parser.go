@@ -147,6 +147,9 @@ var stoplist = map[int32]bool{
 	LSWITCH:   true,
 	LTYPE:     true,
 	LVAR:      true,
+
+	// L.J: Concurrent Map critical section
+	LINTERLOCKED:	true,
 }
 
 // Advance consumes tokens until it finds a token of the stop- or followlist.
@@ -232,6 +235,9 @@ var tokstrings = map[int32]string{
 	LSWITCH:    "switch",
 	LTYPE:      "type",
 	LVAR:       "var",
+
+	// L.J: Concurrent Map critical section
+	LINTERLOCKED:	"runtime.Interlocked",
 }
 
 // usage: defer p.trace(msg)()
@@ -950,6 +956,31 @@ func (p *parser) for_stmt() *Node {
 	popdcl()
 
 	return body
+}
+
+/*
+	Interlocked = "runtime.Interlocked" ExpressionList Block .
+
+	ExpressionList needs to be concurrent maps
+*/
+func (p *parser) interlocked_stmt() *Node {
+	p.want(LINTERLOCKED)
+	markdcl()
+	// Obtain the parameter list passed
+	args := p.expr_list()
+	// Empty argument list is bad
+	if len(args) == 0 {
+		Yyerror("runtime.Interlocked requires at least one map parameter!")
+	}
+
+	stmt := Nod(OINTERLOCKED, nil, nil)
+	// The maps to interlock is kept in the node's List field
+	stmt.List.Set(args)
+	// While technically this is not a loop, loop_body handles parsing everything
+	body := p.loop_body("interlock clause")
+	// The body will be walked in walk.go
+	stmt.Nbody.Append(body...)
+	return stmt
 }
 
 // header parses a combination of if, switch, and for statement headers:
@@ -2573,6 +2604,11 @@ func (p *parser) stmt() *Node {
 		}
 
 		return stmt
+	
+	// L.J: Concurrent Map critical section
+	case LINTERLOCKED:
+		Yyerror("runtime.Interlocked recognized!")
+		return p.interlocked_stmt()
 
 	case ';':
 		return nil

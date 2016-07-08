@@ -150,6 +150,9 @@ const (
 	LTYPE
 	LVAR
 
+	// L.J: Concurrent Map critical section keywords
+	LINTERLOCKED
+
 	LIGNORE
 )
 
@@ -190,6 +193,9 @@ var lexn = map[rune]string{
 	LSWITCH:    "SWITCH",
 	LTYPE:      "TYPE",
 	LVAR:       "VAR",
+
+	// L.J: Concurrent Map critical section
+	LINTERLOCKED: "RUNTIME.INTERLOCKED",
 
 	// LIGNORE is never escaping lexer.next
 }
@@ -625,6 +631,9 @@ var keywords = map[string]int32{
 	"switch":      LSWITCH,
 	"type":        LTYPE,
 	"var":         LVAR,
+
+	// L.J: Concurrent Map critical section
+	"runtime.Interlocked":	LINTERLOCKED,
 
 	// 💩
 	"notwithstanding":      LIGNORE,

@@ -10,6 +10,8 @@ import (
     TODO: While the concurrent map works for non fast types (string, uint32, and uint64) values,
     it will fail and produce undefined behavior in a way, making me believe the compiler
     does something special for fast types. Figure out what is causing this and fix it.
+
+    TODO: Randomize iteration order to reduce convoying (really good idea)
 */
 
 const (
@@ -73,8 +75,6 @@ type bucketArray struct {
     seed uint32
     // Size of the current slice of bucketHdr's
     size uint32
-    // Pointer to the previous bucketArray, if nested; used by iterator
-    backlink *bucketArray
 }
 
 /*
@@ -96,14 +96,25 @@ type concurrentMap struct {
 }
 
 type concurrentIterator struct {
-    // Every time we recurse, we store the previous index here; top refers to current
-    idx []uintptr
+    // What we are wrapping to
+    startPos []iteratorPosition
+    // Each index of pos represents a recursive array we are in
+    stackPos []iteratorPosition
     // Offset we are inside of the bucketData
     offset uintptr
-    // The current bucketArray were are iterating on
-    array *bucketArray
-    // Copy of the current bucketData we are on
+    // If we have traversed back to the root, but need to wrap around to completion
+    wrapping bool
+    // The bucketData we are iterating over
     data bucketData
+}
+
+type iteratorPosition struct {
+    // Current index in the bucketArray we will process next
+    idx uintptr
+    // The index we started on, I.E the one we wrap up to until we consider a bucketArray exhausted
+    startIdx uintptr
+    // The bucketArray we are currently processing
+    arr *bucketArray
 }
 
 func (data *bucketData) key(t *maptype, idx uintptr) unsafe.Pointer {
@@ -482,15 +493,45 @@ func (it *concurrentIterator) nextBucket(t *maptype) bool {
     return true
 }
 
-func (it *concurrentIterator) init(t *maptype, h *hmap) {
-    cmap := (*concurrentMap)(h.chdr)
-    it.idx = make([]uintptr, 1)
-    it.array = &cmap.root
+/*
+        We must find a random bucket, but to do so, we must also recurse through any RECURSIVE bucketArray's we
+        come across. Each time we obtain the lock successfully, we check to see if the cell is empty, and if it
+        is we simply move on to the next one, making doubly sure we do not loop around more than once. 
 
-    // A call to nextBucket() will automatically setup the bucket needed
-    it.nextBucket(t)
-}
+        All of this is accomplished by saving and restoring position information in two slices used as stacks. Goto
+        statements are used for readability and to reduce complexity of the overall control flow.
 
+        To help imagine the complexity of picking a randomized bucket when each bucketArray can be recursive, see the
+        below diagram.
+
+        [0] = Empty bucketData cell
+        [D] = Non-Empty bucketData cell
+        [R] = Recursive bucketArray cell
+        ->  = Points to (used by recursive bucketArray cells)
+        =>  = Iterator pointer (Where the iterator currently is)
+        #N  = The N'th step in the diagram
+
+        [D]
+        [D]
+        [0]
+        [R] -> [0]
+               [0]
+               [0]
+               [0]
+
+        Imagine now that we randomly start at the 4th cell. We must note we need to get back to 
+
+#6 =>   [D]
+        [D]
+        [0]
+#1 =>   [R] -> [0] <= #2
+               [0] <= #3
+               [0] <= #4
+               [0] <= #5
+
+        As can be seen, the iterator will need to be able to wrap all the way around. This is a very
+        complicated operation.
+*/
 func cmapiterinit(t *maptype, h *hmap, it *hiter) {
     // You cannot iterate a nil or empty map
     if h == nil || atomic.Load((*uint32)(unsafe.Pointer(&h.count))) == 0 {
@@ -501,33 +542,270 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
 
     it.t = t
     it.h = h
-    
+
+    cmap := (*concurrentMap)(h.chdr)
     citer := (*concurrentIterator)(newobject(t.concurrentiterator))
-    citer.init(t, h)
     it.citerHdr = unsafe.Pointer(citer)
-    cmapiternext(it)
+    
+    // Our current position 
+    pos := iteratorPosition{0, 0, &cmap.root}
+    // The pushed endIdx to wrap to for this recursive position
+    stackEndIdx := make([]uintptr)
+    // The pushed arrays and current indice for recursive positioning
+    stackPos := make([]iteratorPosition)
+
+    // Randomly decide the bucket we are starting at (to reduce convoying during concurrent iteration)
+    seed := fastrand1()
+    spins := 0
+    
+    setup:
+        // idx is the current index, but endIndx is the one we quit at if we are reach idx again while being in the root
+        idx := seed % pos.arr.size
+        endIdx := idx
+    
+    next:
+        hdr := &pos.arr.data[idx]
+        idx = (idx + 1) % pos.arr.size
+
+        for {
+            // If we acquired the lock successfully
+            if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+                // If the bucket is nil, release the lock and try again
+                if hdr.bucket == nil {
+                    atomic.Storeuintptr(&hdr.info, 0)
+
+                    // If we wrapped around
+                    if idx == endIdx {
+                        // If we wrapped all the way to the root, we found nothing
+                        if pos.arr == &cmap.root {
+                            goto empty
+                        }
+
+                        // Otherwise, we need to go back up one recursive bucketArray
+                        goto pop
+                    }
+
+                    // If we have not wrapped all the way around, get the next
+                    goto next
+                }
+
+                // If it has been found, we're golden
+                goto found
+            }
+
+            // This can never be locked again after converted to array, so completely safe.
+            if (flags & LOCKED) != 0 {
+                spins++
+                Gosched()
+                continue
+            }
+
+            // At this point, we know that it isn't LOCKED, and if it is ARRAY, then it will remain that way.
+            if (flags & ARRAY) != 0 {
+                // Sanity check for if a thread locked it after we loaded flags
+                if !atomic.Casuintptr(&hdr.info, flags, flags) {
+                    spins++
+                    Gosched()
+                    continue
+                }
+                
+                // Push the current information
+                goto push
+            }
+
+            spins++
+            Gosched()
+        }
+
+    pop:
+        // Pop information off stacks
+        pos = stackPos[len(stackPos)-1]
+        stackPos = stackPos[:len(stackPos)-1]
+        idx = pos.startIdx
+        endIdx = stackEndIdx[len(stackPos)-1]
+        stackEndIdx = stackEndIdx[:len(stackPos)-1]
+
+        // idx can be endIdx if it was on the last bucketHdr to wrap around
+        if idx == endIdx {
+            // if the bucketArray we are on is the root, we cannot pop anything else, and we did not find a suitable bucket
+            if pos.arr == &cmap.root {
+                goto empty
+            }
+
+            // Otherwise, we pop off the next one
+            goto pop
+        }
+        // Start over from the upper-level bucketArray
+        goto next
+    push:
+        // Push the current position and index; startIdx is the one we are currently on, idx is the one we are to process next
+        pos.idx = idx
+        pos.startIdx = idx - 1
+        stackPos = append(stackPos, pos)
+
+        // Push the index we are wrapping to
+        stackEndIdx = append(stackEndIdx, endIdx)
+
+        // The current position's bucketArray is the current header's bucket
+        pos.arr = (*bucketArray)(hdr.bucket)
+
+        // Setup on recurisve bucektArray
+        goto setup
+    // 'empty' label is called if and only if we have exhausted our search and came up with nothing
+    empty:
+        it.key = nil
+        it.value = nil
+        
+        return
+    // 'found' label is called if and only if we have found a non-nil bucketData (note we also need to release lock)
+    found:
+        // We need to also push the current pos on top of the stackPos
+        stackPos = append(stackPos, pos)
+        
+        // Finally setup the concurrentIterator
+        typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
+
+        // startPos and stackPos share the same elements at first so startPos can keep track of the wrapped bucketArray
+        citer.startPos = stackPos
+        citer.stackPos = stackPos
+
+        return
 }
 
+/*
+    To help imagine the complexity of picking a randomized bucket when each bucketArray can be recursive, see the below diagram.
+
+        [0] = Empty bucketData cell
+        [D] = Non-Empty bucketData cell
+        [R] = Recursive bucketArray cell
+        ->  = Points to (used by recursive bucketArray cells)
+        =>  = Iterator pointer (Where the iterator currently is)
+        #N  = The N'th step in the diagram
+
+        [D]
+        [D]
+        [0]
+        [R] -> [0]
+               [0]
+               [0]
+               [0]
+
+
+    Imagine now that we randomly start at the 3rd cell...
+
+
+    #7 =>   [D]
+            [D]
+    #1 =>   [0]
+    #2 =>   [R] -> [0] <= #3
+                   [0] <= #4
+                   [0] <= #5
+                   [0] <= #6
+                
+    This is the simple case. This assumes, of course, we started on a not already-nested cell. Now imagine a more realistic case
+
+            [R] ----------------> [R] ------------> [D]
+            [D]                   [0]               [D]                                             
+            [D]                   [0]               [D]
+            [R] -> [0]                              [R] -------> [0]
+                   [0]                                           [0] // Start here
+                   [0]                                           [0]                
+                   [0]                                           [0]
+                
+    I may be overcomplicating things here...
+
+    #14 => [R] ---------> #15 => [R] ------------> [D] <= #16
+           [D] <= #7             [0] <= #5         [D] <= #17                                            
+           [D] <= #8             [0] <= #6         [D] <= #18
+     #9 => [R] -> [0] <= #10                 #4 => [R] -------> [0] <= #19
+                  [0] <= #11                                    [0] <= #1
+                  [0] <= #12                                    [0] <= #2          
+                  [0] <= #13                                    [0] <= #3
+                
+
+    Note now the reason why we end up going back is because we cannot afford to hit the same bucket twice,
+    and if we recurse to another array, we could accidentally hit it again on the way back. Hence, we have to wrap around to hit 
+    everything.
+*/
 func cmapiternext(it *hiter) {
     citer := (*concurrentIterator)(it.citerHdr)
-    for {
-        k, v := citer.nextKeyValue(it.t)
-        
-        // If k == nil, then there is no next Key or Value in this bucketData, so retrieve next.
-        if k == nil {
-            citer.offset = 0
-            // If there is no nextBucket, then we are finished; mark key and value to be nil
-            if !citer.nextBucket(it.t) {
-                it.key = nil
-                it.value = nil
-                return
+    root := &(*concurrentMap)(it.h.chdr).root
+    data := &citer.data
+    var key, value unsafe.Pointer
+
+    findKeyValue:
+        offset := citer.offset
+        citer.offset++
+
+        // If there is more to find, do so
+        if offset < MAXCHAIN {
+            // If the hash is 0, that index is empty
+            if data.hash[offset] == 0 {
+                goto findKeyValue
             }
-            continue
+
+            // The key and values are present, but perform necessary indirection
+            key = it.data.key(t, it.offset)
+            if t.indirectkey {
+                key = *(*unsafe.Pointer)(key)
+            }
+            value := it.data.value(t, it.offset)
+            if t.indirectvalue {
+                value = *(*unsafe.Pointer)(value)
+            }
+
+            goto found
         }
+
+        // If the offset == MAXCHAIN, then we exhausted this bucketData, reset offset for next one 
+        citer.offset = 0
+    
+    findBucketData:
+        // Pop the current position off the stack
+        pos := &citer.stackPos[len(citer.stackPos)-1]
+
+        // If we are currently wrapping back around
+        if citer.wrapped {
+            // End position is the top of the startPos stack, where we originally started iterating
+            endPos := citer.startPos[len(citer.startPos)-1]
+
+            // If we wrapped to the start
+            if pos.idx == endPos.startIdx && pos.arr == endPos.arr {
+                goto done
+            }
+        }
+
+        // If we have hit the end of this bucketArray (and not wrapping)
+        if !citer.wrapping && pos.idx == pos.arr.size {
+            // Reset to 0
+            pos.idx = 0
+
+            // If we are currently on the root, we have iterated through everything but the nodes before startPos.idx, so do so now
+            if pos.arr == root {
+                // Setting wrapped flag to true triggers a specialized mode for the iterator
+                citer.wrapping = true
+                
+                goto findBucketData
+            }
+
+            // Otherwise, we exhausted this bucket, go back one
+            goto pop
+        }
+        hdr := &pos.arr.data[pos.idx]
+        pos.idx++
+
+    pop:
+
+    push:
+
+    done:
+        it.key = nil
+        it.value = nil
+        return
+    found:
         it.key = k
         it.value = v
         return
-    }
 }
 
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
