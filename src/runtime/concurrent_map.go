@@ -96,14 +96,10 @@ type concurrentMap struct {
 }
 
 type concurrentIterator struct {
-    // What we are wrapping to
-    startPos []iteratorPosition
     // Each index of pos represents a recursive array we are in
     stackPos []iteratorPosition
     // Offset we are inside of the bucketData
     offset uintptr
-    // If we have traversed back to the root, but need to wrap around to completion
-    wrapping bool
     // The bucketData we are iterating over
     data bucketData
 }
@@ -147,7 +143,7 @@ func (data *bucketData) value(t *maptype, idx uintptr) unsafe.Pointer {
     lockHolder := uintptr(flags &^ 0x7)
     ...
     if lockHolder == gptr {
-        // println("......g #", g.goid, ": re-entered the lock")
+        // println("......g #", getg().goid, ": re-entered the lock")
         return &(arr.data[idx])
     } else if lockHolder != 0 {
         spins++
@@ -157,11 +153,11 @@ func (data *bucketData) value(t *maptype, idx uintptr) unsafe.Pointer {
     ...
     // Attempt to acquire the lock ourselves atomically
     if atomic.Casuintptr(&(arr.data[idx].info), flags, gptr | lowBits) {
-        // println("......g #", g.goid, ":  acquired lock")
-        g.releaseBucket = unsafe.Pointer(&arr.data[idx])
-        // g.releaseM = acquirem()
+        // println("......g #", getg().goid, ":  acquired lock")
+        getg().releaseBucket = unsafe.Pointer(&arr.data[idx])
+        // getg().releaseM = acquirem()
         if spins > 0 {
-            // println(".........g #", g.goid, ": wasted ", spins, " CPU cycles spinning")
+            // println(".........g #", getg().goid, ": wasted ", spins, " CPU cycles spinning")
         }
         return &(arr.data[idx])
     }
@@ -224,64 +220,43 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
     hash := t.key.alg.hash(key, uintptr(arr.seed))
     idx := hash % uintptr(arr.size)
     hdr := &(arr.data[idx])
-    g := getg().m.curg
+    // g := getg().m.curg
     spins := 0
 
-    // println("...g #", g.goid, ": Obtained bucketHdr #", idx, " with addr:", hdr, "and seed:", uintptr(arr.seed), " and hash: ", uintptr(hash))
+    // println("...g #", getg().goid, ": Obtained bucketHdr #", idx, " with addr:", hdr, "and seed:", uintptr(arr.seed), " and hash: ", uintptr(hash))
 
-    // TODO: Use the holder 'g' to keep track of whether or not the holder is still running or not to determine if we should yield.
     for {
-        // A simple CAS can be used to attempt to acquire the lock. If it is an ARRAY, this will always fail, as the flag will never be 0 again.
-        if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
-            // println("......g #", g.goid, ":  acquired lock")
-            g.releaseBucket = unsafe.Pointer(&arr.data[idx])
-            // g.releaseM = acquirem()
-            if spins > 0 {
-                // println(".........g #", g.goid, ": wasted ", spins, " CPU cycles spinning")
+            flags := atomic.Loaduintptr(&hdr.info)
+
+            // If is an ARRAY
+            if (flags & ARRAY) != 0 {
+                // In process of conversion
+                if (flags & LOCKED) != 0 {
+                    spins++
+                    continue
+                }
+
+                if spins > 0 {
+                    // println("...g #", getg().goid, ": Recursing through nested array after spinning ", spins, "waiting for allocation")
+                }
+                return (*bucketArray)(hdr.bucket).findBucket(t, key)
             }
-            return &(arr.data[idx]), hash, uintptr(arr.size)
-        }
 
-        /*
-            If we fail the above, then one of two things happens and have certain implications...
+            // Test-And-Test-And-Set acquire lock
+            if (flags & LOCKED) == 0 {
+                // If we acquired the lock successfully
+                if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+                    getg().releaseBucket = unsafe.Pointer(hdr)
+                    if spins > 0 {
+                        // println(".........g #", getg().goid, ": wasted ", spins, " CPU cycles spinning")
+                    }
+                    return &(arr.data[idx]), hash, uintptr(arr.size)
+                }
+            }
 
-            1) Another goroutine currently has the lock. In this case, we simply back off until it no longer
-               has that lock. Note that we must explicitly check if it is LOCKED again, as it is possible for it
-               to be locked and have the ARRAY flag set, as the thread is currently converting it.
-
-            2) The bucket is already an ARRAY and we only need to recurse through it to find what we need. Note now that
-               this invariant means that no other 'g' may acquire this lock, as they will all fail. Hence, by checking if
-               it is LOCKED before checking if it is an ARRAY and recursing we can prevent race conditions. Note that only
-               the array that converted the bucket to an array and set the ARRAY flag may hold the lock.
-        */
-
-        flags := atomic.Loaduintptr(&hdr.info)
-
-        // This can never be locked again after converted to array, so completely safe.
-        if (flags & LOCKED) != 0 {
             spins++
             Gosched()
-            continue
         }
-
-        // At this point, we know that it isn't LOCKED, and if it is ARRAY, then it will remain that way.
-        if (flags & ARRAY) != 0 {
-            // Sanity check for if a thread locked it after we loaded flags
-            if !atomic.Casuintptr(&hdr.info, flags, flags) {
-                spins++
-                Gosched()
-                continue
-            }
-
-            if spins > 0 {
-                // println("...g #", g.goid, ": Recursing through nested array after spinning ", spins, "waiting for allocation")
-            }
-            return (*bucketArray)(hdr.bucket).findBucket(t, key)
-        }
-
-        spins++
-        Gosched()
-    }
 }
 
 type keyType struct {
@@ -302,7 +277,7 @@ func printKey(k unsafe.Pointer) {
 
 func (arr *bucketArray) init(t *maptype, size uintptr) {
     // g := getg().m.curg
-    // println("......g #", g.goid, ": Initializing bucketArray with size ", size)
+    // println("......g #", getg().goid, ": Initializing bucketArray with size ", size)
     arr.data = make([]bucketHdr, size)
     arr.size = uint32(size)
     arr.seed = fastrand1()
@@ -310,7 +285,7 @@ func (arr *bucketArray) init(t *maptype, size uintptr) {
 
 func (hdr *bucketHdr) dataToArray(t *maptype, size uintptr, equal func (k1, k2 unsafe.Pointer) bool) {
     // g := getg().m.curg
-    // println("...g #", g.goid, ": Converting bucketData to bucketArray")
+    // println("...g #", getg().goid, ": Converting bucketData to bucketArray")
     array := (*bucketArray)(newobject(t.bucketarray))
     array.init(t, size)
     data := (*bucketData)(hdr.bucket)
@@ -346,13 +321,8 @@ func (hdr *bucketHdr) dataToArray(t *maptype, size uintptr, equal func (k1, k2 u
         }
     }
 
-    // Atomically 'OR' ARRAY in place without releasing the spinlock
-    for {
-        oldInfo := atomic.Loaduintptr(&hdr.info)
-        if atomic.Casuintptr(&hdr.info, oldInfo, oldInfo | ARRAY) {
-            break;
-        }
-    }
+    // Set the ARRAY bit, release lock
+    atomic.Storeuintptr(&hdr.info, ARRAY)
 }
 
 func (it *concurrentIterator) nextKeyValue(t *maptype) (unsafe.Pointer, unsafe.Pointer) {
@@ -383,114 +353,6 @@ func (it *concurrentIterator) nextKeyValue(t *maptype) (unsafe.Pointer, unsafe.P
 
     // If we find nothing, we return nothing
     return nil, nil
-}
-
-/*
-    Obtains the next bucketData in this bucketArray. Each time we recurse, we must store
-    the previous 
-*/
-func (it *concurrentIterator) nextBucket(t *maptype) bool {
-    // The current index we are on is the top; idxPtr is kept to easily allow mutation.
-    idxPtr := &it.idx[len(it.idx)-1]
-    idx := *idxPtr
-    
-    // If the index is equal to array.size (out of bounds), then we exhausted all buckets here.
-    if idx == uintptr(it.array.size) {
-        // If it is not possible to go back, we have iterated over the entire map
-        if it.array.backlink == nil {
-            it.array = nil
-            return false
-        }
-
-        // If we can, traverse through the backlink and pop off this idx from the stack
-        it.array = it.array.backlink
-        it.idx = it.idx[:len(it.idx)-1]
-
-        // Recursively evaluate the next bucket (saves effort on our part)
-        return it.nextBucket(t)
-    }
-
-    hdr := &it.array.data[idx]
-    var data *bucketData
-    spins := 0
-    (*idxPtr)++
-
-    // Find the next appropriate bucketData
-    for {
-        // A simple CAS can be used to attempt to acquire the lock. If it is an ARRAY, this will always fail, as the flag will never be 0 again.
-        if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
-            // println("......g #", g.goid, ":  iterator acquired lock")
-            if spins > 0 {
-                // println(".........g #", g.goid, ": iterator wasted ", spins, " CPU cycles spinning")
-            }
-            
-            // We have the bucket we want
-            data = (*bucketData)(hdr.bucket)
-            break
-        }
-
-        flags := atomic.Loaduintptr(&hdr.info)
-
-        // This can never be locked again after converted to array, so completely safe.
-        if (flags & LOCKED) != 0 {
-            spins++
-            Gosched()
-            continue
-        }
-
-        // At this point, we know that it isn't LOCKED, and if it is ARRAY, then it will remain that way.
-        if (flags & ARRAY) != 0 {
-            // Sanity check for if a thread locked it after we loaded flags
-            if !atomic.Casuintptr(&hdr.info, flags, flags) {
-                spins++
-                Gosched()
-                continue
-            }
-
-            if spins > 0 {
-                // println("...g #", g.goid, ": Iterator recursing through nested array after spinning ", spins, "waiting for allocation")
-            }
-            
-            // Set the backlink in case it wasn't already, and setup safe recursive traversal
-            oldArray := it.array
-            it.array = (*bucketArray)(hdr.bucket)
-            it.array.backlink = oldArray
-            it.idx = append(it.idx, 0)
-            
-            // Now recurse to reduce needed work
-            return it.nextBucket(t)
-        }
-
-        spins++
-        Gosched()
-    }
-
-    // if the bucket is nil, then it's empty, move on to the next, recursively to save work
-    if data == nil {
-        // Atomically release lock
-        for {
-            oldFlags := atomic.Loaduintptr(&hdr.info)
-            if atomic.Casuintptr(&hdr.info, oldFlags, uintptr(oldFlags &^ LOCKED)) {
-                break
-            }
-        }
-
-        // Now recurse to reduce needed work
-        return it.nextBucket(t)
-    }
-
-    // If data is not nil, then we make and operate on a simple bucketCopy
-    typedmemmove(t.bucketdata, unsafe.Pointer(&it.data), unsafe.Pointer(data))
-
-    // Atomically release lock
-    for {
-        oldFlags := atomic.Loaduintptr(&hdr.info)
-        if atomic.Casuintptr(&hdr.info, oldFlags, uintptr(oldFlags &^ LOCKED)) {
-            break
-        }
-    }
-
-    return true
 }
 
 /*
@@ -549,68 +411,67 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
     
     // Our current position 
     pos := iteratorPosition{0, 0, &cmap.root}
-    // The pushed endIdx to wrap to for this recursive position
-    stackEndIdx := make([]uintptr)
     // The pushed arrays and current indice for recursive positioning
-    stackPos := make([]iteratorPosition)
+    stackPos := make([]iteratorPosition, 0, 16)
+    // Current header
+    var hdr *bucketHdr
 
     // Randomly decide the bucket we are starting at (to reduce convoying during concurrent iteration)
     seed := fastrand1()
     spins := 0
     
     setup:
-        // idx is the current index, but endIndx is the one we quit at if we are reach idx again while being in the root
-        idx := seed % pos.arr.size
-        endIdx := idx
-    
+        // idx is the current index, but startIdx is the one we quit at if we are reach idx again
+        pos.idx = uintptr(seed % pos.arr.size)
+        pos.startIdx = pos.idx
+
     next:
-        hdr := &pos.arr.data[idx]
-        idx = (idx + 1) % pos.arr.size
+        hdr = &pos.arr.data[pos.idx]
+        pos.idx = (pos.idx + 1) % uintptr(pos.arr.size)
+
+         // If we wrapped around
+        if pos.idx == pos.startIdx {
+            // If we wrapped all the way to the root, we found nothing
+            if pos.arr == &cmap.root {
+                goto empty
+            }
+
+            // Otherwise, we need to go back up one recursive bucketArray
+            goto pop
+        }
+
+        // Read ahead of time if we should skip to the next or attempt to lock and acquire (Test-And-Test-And-Set)
+        if atomic.Loadp(unsafe.Pointer(&hdr.bucket)) == nil {
+            goto next
+        } 
 
         for {
-            // If we acquired the lock successfully
-            if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
-                // If the bucket is nil, release the lock and try again
-                if hdr.bucket == nil {
-                    atomic.Storeuintptr(&hdr.info, 0)
+            flags := atomic.Loaduintptr(&hdr.info)
 
-                    // If we wrapped around
-                    if idx == endIdx {
-                        // If we wrapped all the way to the root, we found nothing
-                        if pos.arr == &cmap.root {
-                            goto empty
-                        }
-
-                        // Otherwise, we need to go back up one recursive bucketArray
-                        goto pop
-                    }
-
-                    // If we have not wrapped all the way around, get the next
-                    goto next
-                }
-
-                // If it has been found, we're golden
-                goto found
-            }
-
-            // This can never be locked again after converted to array, so completely safe.
-            if (flags & LOCKED) != 0 {
-                spins++
-                Gosched()
-                continue
-            }
-
-            // At this point, we know that it isn't LOCKED, and if it is ARRAY, then it will remain that way.
+            // If is an ARRAY
             if (flags & ARRAY) != 0 {
-                // Sanity check for if a thread locked it after we loaded flags
-                if !atomic.Casuintptr(&hdr.info, flags, flags) {
-                    spins++
-                    Gosched()
+                // In process of conversion
+                if (flags & LOCKED) != 0 {
                     continue
                 }
-                
-                // Push the current information
+
+                // Once ARRAY is set and it is not locked, it can never change
                 goto push
+            }
+
+            // Test-And-Test-And-Set acquire lock
+            if (flags & LOCKED) == 0 {
+                // If we acquired the lock successfully
+                if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+                    // If the bucket is nil, release the lock and try again
+                    if hdr.bucket == nil {
+                        atomic.Storeuintptr(&hdr.info, 0)
+                        goto next
+                    }
+
+                    // If it has been found, we're golden
+                    goto found
+                }
             }
 
             spins++
@@ -621,30 +482,12 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
         // Pop information off stacks
         pos = stackPos[len(stackPos)-1]
         stackPos = stackPos[:len(stackPos)-1]
-        idx = pos.startIdx
-        endIdx = stackEndIdx[len(stackPos)-1]
-        stackEndIdx = stackEndIdx[:len(stackPos)-1]
 
-        // idx can be endIdx if it was on the last bucketHdr to wrap around
-        if idx == endIdx {
-            // if the bucketArray we are on is the root, we cannot pop anything else, and we did not find a suitable bucket
-            if pos.arr == &cmap.root {
-                goto empty
-            }
-
-            // Otherwise, we pop off the next one
-            goto pop
-        }
         // Start over from the upper-level bucketArray
         goto next
     push:
-        // Push the current position and index; startIdx is the one we are currently on, idx is the one we are to process next
-        pos.idx = idx
-        pos.startIdx = idx - 1
+        // Push the current position on stack
         stackPos = append(stackPos, pos)
-
-        // Push the index we are wrapping to
-        stackEndIdx = append(stackEndIdx, endIdx)
 
         // The current position's bucketArray is the current header's bucket
         pos.arr = (*bucketArray)(hdr.bucket)
@@ -662,12 +505,22 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
         // We need to also push the current pos on top of the stackPos
         stackPos = append(stackPos, pos)
         
-        // Finally setup the concurrentIterator
+        // Finally setup the concurrentIterator and release lock
         typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
+        atomic.Storeuintptr(&hdr.info, 0)
 
-        // startPos and stackPos share the same elements at first so startPos can keep track of the wrapped bucketArray
-        citer.startPos = stackPos
+        // Set the position stack
         citer.stackPos = stackPos
+
+        // Set the key and value
+        for i := 0; i < MAXCHAIN; i++ {
+            if citer.data.hash[i] != 0 {
+                it.key = citer.data.key(t, uintptr(i))
+                it.value = citer.data.value(t, uintptr(i))
+                citer.offset = uintptr(i)
+                return
+            }
+        }
 
         return
 }
@@ -714,13 +567,13 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                 
     I may be overcomplicating things here...
 
-    #14 => [R] ---------> #15 => [R] ------------> [D] <= #16
-           [D] <= #7             [0] <= #5         [D] <= #17                                            
-           [D] <= #8             [0] <= #6         [D] <= #18
-     #9 => [R] -> [0] <= #10                 #4 => [R] -------> [0] <= #19
-                  [0] <= #11                                    [0] <= #1
-                  [0] <= #12                                    [0] <= #2          
-                  [0] <= #13                                    [0] <= #3
+    #14 => [R] -------------> => [R] ------------> [D] <= #6
+           [D] <= #11            [0] <= #9         [D] <= #7                                            
+           [D] <= #12            [0] <= #10        [D] <= #8
+    #13 => [R] -> [0] <= #14                 #5 => [R] -------> [0] <= #4
+                  [0] <= #15                                    [0] <= #1
+                  [0] <= #16                                    [0] <= #2          
+                  [0] <= #17                                    [0] <= #3
                 
 
     Note now the reason why we end up going back is because we cannot afford to hit the same bucket twice,
@@ -731,6 +584,8 @@ func cmapiternext(it *hiter) {
     citer := (*concurrentIterator)(it.citerHdr)
     root := &(*concurrentMap)(it.h.chdr).root
     data := &citer.data
+    t := it.t
+    var hdr *bucketHdr
     var key, value unsafe.Pointer
 
     findKeyValue:
@@ -745,67 +600,106 @@ func cmapiternext(it *hiter) {
             }
 
             // The key and values are present, but perform necessary indirection
-            key = it.data.key(t, it.offset)
+            key = citer.data.key(t, offset)
             if t.indirectkey {
                 key = *(*unsafe.Pointer)(key)
             }
-            value := it.data.value(t, it.offset)
+            value = citer.data.value(t, offset)
             if t.indirectvalue {
                 value = *(*unsafe.Pointer)(value)
             }
 
-            goto found
+            // Set the iterator's data and we're done
+            it.key = key
+            it.value = value
+            return
         }
 
         // If the offset == MAXCHAIN, then we exhausted this bucketData, reset offset for next one 
         citer.offset = 0
     
-    findBucketData:
+    setup:
         // Pop the current position off the stack
         pos := &citer.stackPos[len(citer.stackPos)-1]
 
-        // If we are currently wrapping back around
-        if citer.wrapped {
-            // End position is the top of the startPos stack, where we originally started iterating
-            endPos := citer.startPos[len(citer.startPos)-1]
-
-            // If we wrapped to the start
-            if pos.idx == endPos.startIdx && pos.arr == endPos.arr {
-                goto done
-            }
-        }
-
-        // If we have hit the end of this bucketArray (and not wrapping)
-        if !citer.wrapping && pos.idx == pos.arr.size {
-            // Reset to 0
-            pos.idx = 0
-
-            // If we are currently on the root, we have iterated through everything but the nodes before startPos.idx, so do so now
+        // If we already wrapped all the way around
+        if pos.idx == pos.startIdx {
+            // If this is the root, we can't pop anymore
             if pos.arr == root {
-                // Setting wrapped flag to true triggers a specialized mode for the iterator
-                citer.wrapping = true
-                
-                goto findBucketData
+                goto done
+            } else {
+                goto pop
+            }
+        }
+
+    next:
+
+        hdr = &pos.arr.data[pos.idx]
+        pos.idx = (pos.idx + 1) % uintptr(pos.arr.size)
+
+        // Read ahead of time if we should skip to the next or attempt to lock and acquire (Test-And-Test-And-Set)
+        if atomic.Loadp(unsafe.Pointer(&hdr.bucket)) == nil {
+            goto setup
+        } 
+
+        for {
+            flags := atomic.Loaduintptr(&hdr.info)
+
+            // If is an ARRAY
+            if (flags & ARRAY) != 0 {
+                // In process of conversion
+                if (flags & LOCKED) != 0 {
+                    continue
+                }
+
+                // Once ARRAY is set and it is not locked, it can never change
+                goto push
             }
 
-            // Otherwise, we exhausted this bucket, go back one
-            goto pop
+            // Test-And-Test-And-Set acquire lock
+            if (flags & LOCKED) == 0 {
+                // If we acquired the lock successfully
+                if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+                    // If the bucket is nil, release the lock and try again
+                    if hdr.bucket == nil {
+                        atomic.Storeuintptr(&hdr.info, 0)
+                        goto setup
+                    }
+
+                    // If it has been found, we're golden
+                    goto found
+                }
+            }
+
+            Gosched()
         }
-        hdr := &pos.arr.data[pos.idx]
-        pos.idx++
 
     pop:
+        // Discard the current position
+        citer.stackPos = citer.stackPos[:len(citer.stackPos)-1]
 
+        goto setup
     push:
+        // Setup a new position to push on stack
+        citer.stackPos = append(citer.stackPos, iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)})
+
+        // Note above that idx == startIdx, hence we explicitly skip the 'setup' portion and set pos ourselves
+        pos = &citer.stackPos[len(citer.stackPos)-1]
+
+        goto next
 
     done:
         it.key = nil
         it.value = nil
         return
     found:
-        it.key = k
-        it.value = v
-        return
+        // Make a copy of the bucketData
+        typedmemmove(t.bucketdata, unsafe.Pointer(data), hdr.bucket)
+
+        // Unlock bucket
+        atomic.Storeuintptr(&hdr.info, 0)
+
+        goto findKeyValue
 }
 
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
@@ -830,10 +724,11 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 
 func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapassign1")
+    // println("g #", getg().goid, ": cmapassign1")
     // println("...g #", getg().goid, ": Adding Key: ", toKeyType(key).x, "," ,  toKeyType(key).y, " and Value: ", toKeyType(val).x, ",", toKeyType(val).y)
     cmap := (*concurrentMap)(h.chdr)
-    hdr, hash, sz := cmap.root.findBucket(t, key)
+    root := &cmap.root
+    hdr, hash, sz := root.findBucket(t, key)
     
     // If bucket is nil, then we allocate a new one.
     if hdr.bucket == nil {
@@ -875,10 +770,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
     if firstEmpty == -1 {
         // When we convert dataToArray, it's size is double the previous
         hdr.dataToArray(t, sz * 2, t.key.alg.equal)
-
-        // After converting it from to a RECURSIVE array, we can release the lock to allow further concurrency.
-        maprelease()
-        
+    
         // Also we can save effort by just recursively calling this again.
         cmapassign1(t, h, key, val)  
         return
@@ -895,12 +787,8 @@ func maprelease() {
         hdr := (*bucketHdr)(g.releaseBucket)
         
         // Atomically release lock
-        for {
-            oldFlags := atomic.Loaduintptr(&hdr.info)
-            if atomic.Casuintptr(&hdr.info, oldFlags, uintptr(oldFlags &^ LOCKED)) {
-                break
-            }
-        }
+        flags := atomic.Loaduintptr(&hdr.info)
+        atomic.Storeuintptr(&hdr.info, uintptr(flags &^ LOCKED))
 
         g.releaseBucket = nil
         // releasem(g.releaseM)
@@ -913,14 +801,14 @@ func maprelease() {
 */
 func cmapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess1_fast32!")
+    // println("g #", getg().goid, ": cmapaccess1_fast32!")
     retval, _ := cmapaccess2_fast32(t, h, key)
     return retval
 }
 
 func cmapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess2_fast32!")
+    // println("g #", getg().goid, ": cmapaccess2_fast32!")
     return cmapaccess(t, h, noescape(unsafe.Pointer(&key)), 
         func (k1, k2 unsafe.Pointer) bool { 
             return *(*uint32)(k1) == *(*uint32)(k2) 
@@ -930,14 +818,14 @@ func cmapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) 
 
 func cmapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess1_fast64")
+    // println("g #", getg().goid, ": cmapaccess1_fast64")
     retval, _ := cmapaccess2_fast64(t, h, key)
     return retval
 }
 
 func cmapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess2_fast64!")
+    // println("g #", getg().goid, ": cmapaccess2_fast64!")
     return cmapaccess(t, h, noescape(unsafe.Pointer(&key)), 
         func (k1, k2 unsafe.Pointer) bool { 
             return *(*uint64)(k1) == *(*uint64)(k2) 
@@ -946,14 +834,14 @@ func cmapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) 
 
 func cmapaccess1_faststr(t *maptype, h *hmap, key string) unsafe.Pointer {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess1_faststr")
+    // println("g #", getg().goid, ": cmapaccess1_faststr")
     retval, _ := cmapaccess2_faststr(t, h, key)
     return retval
 }
 
 func cmapaccess2_faststr(t *maptype, h *hmap, key string) (unsafe.Pointer, bool) {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess2_faststr")
+    // println("g #", getg().goid, ": cmapaccess2_faststr")
     return cmapaccess(t, h, noescape(unsafe.Pointer(&key)), 
         func (k1, k2 unsafe.Pointer) bool { 
             sk1 := (*stringStruct)(k1)
@@ -967,7 +855,8 @@ func cmapaccess2_faststr(t *maptype, h *hmap, key string) (unsafe.Pointer, bool)
 func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) (unsafe.Pointer, bool) {
     // println("...g #", getg().goid, ": Searching for Key: ", toKeyType(key).x, "," ,  toKeyType(key).y)
     cmap := (*concurrentMap)(h.chdr)
-    hdr, hash, _ := cmap.root.findBucket(t, key)
+    root := &cmap.root
+    hdr, hash, _ := root.findBucket(t, key)
 
     // If the bucket is nil, then it is empty, stop here
     if hdr.bucket == nil {
@@ -1001,14 +890,14 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
 
 func cmapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess2!")
+    // println("g #", getg().goid, ": cmapaccess2!")
 
     return cmapaccess(t, h, key, t.key.alg.equal)
 }
 
 func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapaccess1")
+    // println("g #", getg().goid, ": cmapaccess1")
     retval, _ := cmapaccess2(t, h, key)
 
     // Only difference is that we discard the boolean
@@ -1017,7 +906,7 @@ func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 
 func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
     // g := getg().m.curg
-    // println("g #", g.goid, ": cmapdelete")
+    // println("g #", getg().goid, ": cmapdelete")
 
     cmap := (*concurrentMap)(h.chdr)
     hdr, hash, _ := cmap.root.findBucket(t, key)

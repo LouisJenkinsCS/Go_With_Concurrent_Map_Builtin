@@ -263,17 +263,17 @@ func concurrentIterator(t *Type) *Type {
 	*/
 	pos := typ(TSTRUCT)
 	pos.Noalg = true
-	var posField [2]*Field
+	var posField [3]*Field
 	posField[0] = makefield("idx", Types[TUINTPTR])
-	posField[1] = makefield("arr", Ptrto(bucketArray(t)))
+	posField[1] = makefield("startIdx", Types[TUINTPTR])
+	posField[2] = makefield("arr", Ptrto(bucketArray(t)))
 	pos.SetFields(posField[:])
 	dowidth(pos)
 	
-	var field [4]*Field
-	field[0] = makefield("startPos", typSlice(pos))
-	field[1] = makefield("stackPos", typSlice(pos))
-	field[2] = makefield("offset", Types[TUINTPTR])
-	field[3] = makefield("data", bucketData(t))
+	var field [3]*Field
+	field[0] = makefield("stackPos", typSlice(pos))
+	field[1] = makefield("offset", Types[TUINTPTR])
+	field[2] = makefield("data", bucketData(t))
 
 	citer := typ(TSTRUCT)
 	citer.Noalg = true
@@ -357,7 +357,7 @@ func bucketArray(t *Type) *Type {
 	barr := typ(TSTRUCT)
 	barr.Noalg = true
 
-	var field [4]*Field
+	var field [3]*Field
 	field[0] = makefield("data", typSlice(bucketHdr(t)))
 	field[1] = makefield("seed", Types[TUINT32])
 	field[2] = makefield("size", Types[TUINT32])

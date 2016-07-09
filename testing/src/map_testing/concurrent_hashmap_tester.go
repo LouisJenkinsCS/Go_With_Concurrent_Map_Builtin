@@ -136,9 +136,9 @@ func TestConcurrentMap() {
 		insertTime[iterations] = end
 		// memProf.Stop()
 		// prof.Stop()
-		// log.Printf("[Concurrent Map] ~Trial #%v~ Insertion Time: %v\n", iterations + 1, end)
+		// fmt.Printf("[Concurrent Map] ~Trial #%v~ Insertion Time: %v\n", iterations + 1, end)
 
-		// log.Printf("[Concurrent Map] ~Trial #%v~ Testing Insertion Accuracy...", iterations + 1)
+		// fmt.Printf("[Concurrent Map] ~Trial #%v~ Testing Insertion Accuracy...", iterations + 1)
 		start = time.Now()
 		test_map_insertion_accuracy(m)
 		end = time.Since(start)
@@ -152,7 +152,7 @@ func TestConcurrentMap() {
 		end = time.Since(start)
 		iterationTime[iterations] = end
 
-		// log.Printf("[Concurrent Map] ~Trial #%v~ Deleting all %v elements...", iterations + 1, ROWS * COLS)
+		// fmt.Printf("[Concurrent Map] ~Trial #%v~ Deleting all %v elements...", iterations + 1, ROWS * COLS)
 		start = time.Now()
 		delete_map_struct(m)
 		for i := 0; i < ROWS; i++ {
@@ -161,7 +161,7 @@ func TestConcurrentMap() {
 		end = time.Since(start)
 		deleteTime[iterations] = end
 
-		// log.Printf("[Concurrent Map] ~Trial #%v~ Testing Deletion Accuracy...", iterations + 1)
+		// fmt.Printf("[Concurrent Map] ~Trial #%v~ Testing Deletion Accuracy...", iterations + 1)
 		start = time.Now()
 		test_map_deletion_accuracy(m)
 		end = time.Since(start)
