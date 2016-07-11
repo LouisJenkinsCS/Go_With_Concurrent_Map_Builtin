@@ -158,6 +158,10 @@ func walkrange(n *Node) {
 	// to avoid erroneous processing by racewalk.
 	n.List.Set(nil)
 
+	if (n.flags & isInterlockedRange) != 0 && t.Etype != TMAP {
+		Yyerror("Cannot use sync.Interlocked with non-map type")
+	} 
+
 	var body []*Node
 	var init []*Node
 	switch t.Etype {
@@ -228,6 +232,10 @@ func walkrange(n *Node) {
 		n.Left = nil
 		keysym := th.Field(0).Sym // depends on layout of iterator struct.  See reflect.go:hiter
 		valsym := th.Field(1).Sym // ditto
+
+		if (n.flags & isInterlockedRange) != 0 {
+			println("sync.Interlocked keyword recognized!")
+		}
 
 		fn := syslook("mapiterinit")
 

@@ -270,10 +270,11 @@ func concurrentIterator(t *Type) *Type {
 	pos.SetFields(posField[:])
 	dowidth(pos)
 	
-	var field [3]*Field
+	var field [4]*Field
 	field[0] = makefield("stackPos", typSlice(pos))
-	field[1] = makefield("offset", Types[TUINTPTR])
-	field[2] = makefield("data", bucketData(t))
+	field[1] = makefield("len", Types[TUINTPTR])
+	field[2] = makefield("offset", Types[TUINTPTR])
+	field[3] = makefield("data", bucketData(t))
 
 	citer := typ(TSTRUCT)
 	citer.Noalg = true

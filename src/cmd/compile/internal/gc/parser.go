@@ -14,6 +14,7 @@ package gc
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -237,7 +238,7 @@ var tokstrings = map[int32]string{
 	LVAR:       "var",
 
 	// L.J: Concurrent Map critical section
-	LINTERLOCKED:	"runtime.Interlocked",
+	LINTERLOCKED:	"sync.Interlocked",
 }
 
 // usage: defer p.trace(msg)()
@@ -543,9 +544,20 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 	}
 
 	if rangeOk && p.got(LRANGE) {
+		isInterlocked := false
+
+		lookAhead, err := p.bin.Peek(len("range sync.Interlocked"))
+		// If the keyword "sync.Interlocked" is next, note it's presence and discard it
+		if err == nil && string(bytes.Trim(lookAhead, " ")) == "range sync.Interlocked" {
+			isInterlocked = true
+			p.advance()
+		} 
 		// LRANGE expr
 		r := Nod(ORANGE, nil, p.expr())
 		r.Etype = 0 // := flag
+		if isInterlocked {
+			r.flags |= isInterlockedRange
+		}
 		return r
 	}
 
@@ -612,10 +624,21 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 	case '=':
 		p.next()
 		if rangeOk && p.got(LRANGE) {
+			isInterlocked := false
+
+			lookAhead, err := p.bin.Peek(len("range sync.Interlocked"))
+			// If the keyword "sync.Interlocked" is next, note it's presence and discard it
+			if err == nil && string(bytes.Trim(lookAhead, " ")) == "range sync.Interlocked" {
+				isInterlocked = true
+				p.advance()
+			} 
 			// expr_list '=' LRANGE expr
 			r := Nod(ORANGE, nil, p.expr())
 			r.List.Set(lhs)
 			r.Etype = 0 // := flag
+			if isInterlocked {
+				r.flags |= isInterlockedRange
+			}
 			return r
 		}
 
@@ -637,11 +660,22 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 		p.next()
 
 		if rangeOk && p.got(LRANGE) {
+			isInterlocked := false
+
+			lookAhead, err := p.bin.Peek(len("range sync.Interlocked"))
+			// If the keyword "sync.Interlocked" is next, note it's presence and discard it
+			if err == nil && string(bytes.Trim(lookAhead, " ")) == "range sync.Interlocked" {
+				isInterlocked = true
+				p.advance()
+			} 
 			// expr_list LCOLAS LRANGE expr
 			r := Nod(ORANGE, nil, p.expr())
 			r.List.Set(lhs)
 			r.Colas = true
 			colasdefn(lhs, r)
+			if isInterlocked {
+				r.flags |= isInterlockedRange
+			}
 			return r
 		}
 
@@ -959,7 +993,7 @@ func (p *parser) for_stmt() *Node {
 }
 
 /*
-	Interlocked = "runtime.Interlocked" ExpressionList Block .
+	Interlocked = "sync.Interlocked" ExpressionList Block .
 
 	ExpressionList needs to be concurrent maps
 */
@@ -970,7 +1004,7 @@ func (p *parser) interlocked_stmt() *Node {
 	args := p.expr_list()
 	// Empty argument list is bad
 	if len(args) == 0 {
-		Yyerror("runtime.Interlocked requires at least one map parameter!")
+		Yyerror("sync.Interlocked requires at least one map parameter!")
 	}
 
 	stmt := Nod(OINTERLOCKED, nil, nil)
@@ -2607,7 +2641,7 @@ func (p *parser) stmt() *Node {
 	
 	// L.J: Concurrent Map critical section
 	case LINTERLOCKED:
-		Yyerror("runtime.Interlocked recognized!")
+		Yyerror("sync.Interlocked recognized!")
 		return p.interlocked_stmt()
 
 	case ';':

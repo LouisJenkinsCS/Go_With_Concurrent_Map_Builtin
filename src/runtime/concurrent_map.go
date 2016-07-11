@@ -3,6 +3,7 @@ package runtime
 
 import (
     "runtime/internal/atomic"
+    "runtime/internal/sys"
     "unsafe"
 )
 
@@ -32,6 +33,9 @@ const (
     UNUSED = 0
     // bucketData is in use
     USED = 1 << 0
+
+    // Maximum spins until exponential backoff kicks in
+    BACKOFF_AFTER_SPINS = 0
 
     // See hashmap.go, this obtains a properly aligned offset to the data
     cdataOffset = unsafe.Offsetof(struct {
@@ -98,6 +102,8 @@ type concurrentMap struct {
 type concurrentIterator struct {
     // Each index of pos represents a recursive array we are in
     stackPos []iteratorPosition
+    // The 'size' of the stackPos. We explicitly need to keep track of this so we don't rely on len() function and can directly indice
+    len uintptr
     // Offset we are inside of the bucketData
     offset uintptr
     // The bucketData we are iterating over
@@ -222,6 +228,7 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
     hdr := &(arr.data[idx])
     // g := getg().m.curg
     spins := 0
+    var backoff int64 = 1
 
     // println("...g #", getg().goid, ": Obtained bucketHdr #", idx, " with addr:", hdr, "and seed:", uintptr(arr.seed), " and hash: ", uintptr(hash))
 
@@ -233,6 +240,12 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
                 // In process of conversion
                 if (flags & LOCKED) != 0 {
                     spins++
+
+                    // 
+                    if spins > BACKOFF_AFTER_SPINS {
+                        timeSleep(backoff)
+                        backoff *= 2
+                    }
                     continue
                 }
 
@@ -255,7 +268,10 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
             }
 
             spins++
-            Gosched()
+            if spins > BACKOFF_AFTER_SPINS {
+                timeSleep(backoff)
+                backoff *= 2
+            }
         }
 }
 
@@ -408,21 +424,24 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
     cmap := (*concurrentMap)(h.chdr)
     citer := (*concurrentIterator)(newobject(t.concurrentiterator))
     it.citerHdr = unsafe.Pointer(citer)
+    var len uintptr = 0
     
     // Our current position 
     pos := iteratorPosition{0, 0, &cmap.root}
     // The pushed arrays and current indice for recursive positioning
-    stackPos := make([]iteratorPosition, 0, 16)
+    stackPos := make([]iteratorPosition, 16)
     // Current header
     var hdr *bucketHdr
 
-    // Randomly decide the bucket we are starting at (to reduce convoying during concurrent iteration)
-    seed := fastrand1()
+    // Randomly decide the bucket we are starting at (to reduce convoying during concurrent iteration).
+    seed := (uintptr(fastrand1()) | uintptr(1 << ((sys.PtrSize * 8) - 1)) | uintptr(1))
+    // println("Random Generated Seed: ", seed)
     spins := 0
+    var backoff int64 = 1
     
     setup:
         // idx is the current index, but startIdx is the one we quit at if we are reach idx again
-        pos.idx = uintptr(seed % pos.arr.size)
+        pos.idx = seed % uintptr(pos.arr.size)
         pos.startIdx = pos.idx
 
     next:
@@ -443,7 +462,10 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
         // Read ahead of time if we should skip to the next or attempt to lock and acquire (Test-And-Test-And-Set)
         if atomic.Loadp(unsafe.Pointer(&hdr.bucket)) == nil {
             goto next
-        } 
+        }
+
+        backoff = 1
+        spins = 0
 
         for {
             flags := atomic.Loaduintptr(&hdr.info)
@@ -452,6 +474,11 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
             if (flags & ARRAY) != 0 {
                 // In process of conversion
                 if (flags & LOCKED) != 0 {
+                    spins++
+                    if spins > BACKOFF_AFTER_SPINS {
+                        timeSleep(backoff)
+                        backoff *= 2
+                    }
                     continue
                 }
 
@@ -475,19 +502,27 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
             }
 
             spins++
-            Gosched()
+            if spins > BACKOFF_AFTER_SPINS {
+                timeSleep(backoff)
+                backoff *= 2
+            }
         }
 
     pop:
         // Pop information off stacks
-        pos = stackPos[len(stackPos)-1]
-        stackPos = stackPos[:len(stackPos)-1]
+        len--
+        pos = stackPos[len]
 
         // Start over from the upper-level bucketArray
         goto next
     push:
         // Push the current position on stack
-        stackPos = append(stackPos, pos)
+        if len == uintptr(cap(stackPos)) {
+            stackPos = append(stackPos, pos)
+        } else {
+            stackPos[len] = pos
+        }
+        len++
 
         // The current position's bucketArray is the current header's bucket
         pos.arr = (*bucketArray)(hdr.bucket)
@@ -503,7 +538,11 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
     // 'found' label is called if and only if we have found a non-nil bucketData (note we also need to release lock)
     found:
         // We need to also push the current pos on top of the stackPos
-        stackPos = append(stackPos, pos)
+        if len == uintptr(cap(stackPos)) {
+            stackPos = append(stackPos, pos)
+        } else {
+            stackPos[len] = pos
+        }
         
         // Finally setup the concurrentIterator and release lock
         typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
@@ -511,6 +550,7 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
 
         // Set the position stack
         citer.stackPos = stackPos
+        citer.len = len
 
         // Set the key and value
         for i := 0; i < MAXCHAIN; i++ {
@@ -587,6 +627,8 @@ func cmapiternext(it *hiter) {
     t := it.t
     var hdr *bucketHdr
     var key, value unsafe.Pointer
+    spins := 0
+    var backoff int64 = 1
 
     findKeyValue:
         offset := citer.offset
@@ -620,7 +662,8 @@ func cmapiternext(it *hiter) {
     
     setup:
         // Pop the current position off the stack
-        pos := &citer.stackPos[len(citer.stackPos)-1]
+        // println("g #", getg().goid, ": citer.len: ", citer.len, ";len: ", len(citer.stackPos), ";cap: ", cap(citer.stackPos))
+        pos := &citer.stackPos[citer.len]
 
         // If we already wrapped all the way around
         if pos.idx == pos.startIdx {
@@ -642,6 +685,9 @@ func cmapiternext(it *hiter) {
             goto setup
         } 
 
+        spins = 0
+        backoff = 1
+
         for {
             flags := atomic.Loaduintptr(&hdr.info)
 
@@ -649,6 +695,11 @@ func cmapiternext(it *hiter) {
             if (flags & ARRAY) != 0 {
                 // In process of conversion
                 if (flags & LOCKED) != 0 {
+                    spins++
+                    if spins > BACKOFF_AFTER_SPINS {
+                        timeSleep(backoff)
+                        backoff *= 2
+                    }
                     continue
                 }
 
@@ -671,20 +722,29 @@ func cmapiternext(it *hiter) {
                 }
             }
 
-            Gosched()
+            spins++
+            if spins > BACKOFF_AFTER_SPINS {
+                timeSleep(backoff)
+                backoff *= 2
+            }
         }
 
     pop:
         // Discard the current position
-        citer.stackPos = citer.stackPos[:len(citer.stackPos)-1]
+        citer.len--
 
         goto setup
     push:
         // Setup a new position to push on stack
-        citer.stackPos = append(citer.stackPos, iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)})
+        citer.len++
+        if citer.len == uintptr(cap(citer.stackPos)) {
+            citer.stackPos = append(citer.stackPos, iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)})
+        } else {
+            citer.stackPos[citer.len] = iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)}
+        }
 
         // Note above that idx == startIdx, hence we explicitly skip the 'setup' portion and set pos ourselves
-        pos = &citer.stackPos[len(citer.stackPos)-1]
+        pos = &citer.stackPos[citer.len]
 
         goto next
 

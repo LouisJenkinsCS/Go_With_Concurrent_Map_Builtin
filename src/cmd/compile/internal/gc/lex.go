@@ -195,7 +195,7 @@ var lexn = map[rune]string{
 	LVAR:       "VAR",
 
 	// L.J: Concurrent Map critical section
-	LINTERLOCKED: "RUNTIME.INTERLOCKED",
+	LINTERLOCKED: "SYNC.INTERLOCKED",
 
 	// LIGNORE is never escaping lexer.next
 }
@@ -571,6 +571,13 @@ func (l *lexer) ident(c rune) {
 			cp.WriteRune(c)
 		} else if isLetter(c) || isDigit(c) {
 			cp.WriteByte(byte(c))
+		} else if c == '.' && cp.Len() == 4 && string(cp.Bytes()) == "sync" {
+			// 'sync.' should be accompanied by 'Interlocked' for our keyword; if it doesn't just break
+			if lookAhead, err := l.bin.Peek(11); err == nil && string(lookAhead) == "Interlocked" {
+				cp.WriteByte(byte(c))
+			} else {
+				break
+			}
 		} else {
 			break
 		}
@@ -633,7 +640,7 @@ var keywords = map[string]int32{
 	"var":         LVAR,
 
 	// L.J: Concurrent Map critical section
-	"runtime.Interlocked":	LINTERLOCKED,
+	"sync.Interlocked":	LINTERLOCKED,
 
 	// 💩
 	"notwithstanding":      LIGNORE,
