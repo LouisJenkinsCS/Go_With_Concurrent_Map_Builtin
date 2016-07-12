@@ -571,8 +571,7 @@ func (l *lexer) ident(c rune) {
 			cp.WriteRune(c)
 		} else if isLetter(c) || isDigit(c) {
 			cp.WriteByte(byte(c))
-		} else if c == '.' && cp.Len() == 4 && string(cp.Bytes()) == "sync" {
-			// 'sync.' should be accompanied by 'Interlocked' for our keyword; if it doesn't just break
+		} else if c == '.' && cp.Len() == len("sync") && string(cp.Bytes()) == "sync" {
 			if lookAhead, err := l.bin.Peek(11); err == nil && string(lookAhead) == "Interlocked" {
 				cp.WriteByte(byte(c))
 			} else {

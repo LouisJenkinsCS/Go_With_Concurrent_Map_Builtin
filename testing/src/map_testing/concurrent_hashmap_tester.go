@@ -62,12 +62,12 @@ func all_map_struct(m map[point]point) {
 				// The operation is done at random
 				start := time.Now()
 				if r % iteration_modulo == 0 {
-					for k, v := range m {
-						expected := point{ROWS - k.x, COLS - k.y}
-						if v != expected {
-							panic(fmt.Sprintf("[Concurrent Map] Expected %v for key %v, but received %v", expected, k, v))
-						}
-					}
+					// for k, v := range m {
+					// 	expected := point{ROWS - k.x, COLS - k.y}
+					// 	if v != expected {
+					// 		panic(fmt.Sprintf("[Concurrent Map] Expected %v for key %v, but received %v", expected, k, v))
+					// 	}
+					// }
 					timeIterating += time.Since(start)
 					iterations++
 				} else if r % retrieve_modulo == 0 {
@@ -115,6 +115,7 @@ func TestConcurrentMap() {
 	iterationTime := make([]time.Duration, TESTS)
 	rand.Seed(time.Now().UTC().UnixNano())
 
+	// prof := profile.Start(profile.CPUProfile, profile.ProfilePath("."), profile.NoShutdownHook)
 	all_map_struct(m)
     for i := 0; i < ROWS; i++ {
         <- c
@@ -145,10 +146,10 @@ func TestConcurrentMap() {
 		retrieveTime[iterations * 2] = end
 
 		start = time.Now()
-		iterate_map_struct(m)
-		for i := 0; i < ROWS; i++ {
-			<- c
-		}
+		// iterate_map_struct(m)
+		// for i := 0; i < ROWS; i++ {
+		// 	<- c
+		// }
 		end = time.Since(start)
 		iterationTime[iterations] = end
 
@@ -167,6 +168,7 @@ func TestConcurrentMap() {
 		end = time.Since(start)
 		retrieveTime[(iterations * 2) + 1] = end
 	}
+	// prof.Stop()
 	fmt.Printf("[Concurrent Map] Average Insertion Time: %v\n", averageTime(insertTime))
 	fmt.Printf("[Concurrent Map] Average Retrieval Time: %v\n", averageTime(retrieveTime))
 	fmt.Printf("[Concurrent Map] Average Deletion Time: %v\n", averageTime(deleteTime))

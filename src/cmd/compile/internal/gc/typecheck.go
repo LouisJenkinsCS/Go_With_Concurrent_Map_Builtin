@@ -2040,6 +2040,16 @@ OpSwitch:
 		typecheckslice(n.Nbody.Slice(), Etop)
 		typecheckslice(n.Rlist.Slice(), Etop)
 		break OpSwitch
+	
+	case OINTERLOCKED:
+		ok |= Etop
+		typecheckslice(n.Ninit.Slice(), Etop)
+		n.Left = typecheck(n.Left, Erv)
+		t := n.Left.Type
+		if t == nil || !t.IsMap() {
+			Yyerror("sync.Interlocked requires a map type argument!")
+		}
+		typecheckslice(n.Nbody.Slice(), Etop)
 
 	case ORETURN:
 		ok |= Etop
@@ -3893,6 +3903,9 @@ func (n *Node) isterminating() bool {
 
 	case OIF:
 		return n.Nbody.isterminating() && n.Rlist.isterminating()
+	
+	case OINTERLOCKED:
+		return n.Nbody.isterminating()
 
 	case OSWITCH, OTYPESW, OSELECT:
 		if n.HasBreak() {

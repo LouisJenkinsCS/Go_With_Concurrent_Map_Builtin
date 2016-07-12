@@ -14,7 +14,6 @@ package gc
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -546,12 +545,10 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 	if rangeOk && p.got(LRANGE) {
 		isInterlocked := false
 
-		lookAhead, err := p.bin.Peek(len("range sync.Interlocked"))
-		// If the keyword "sync.Interlocked" is next, note it's presence and discard it
-		if err == nil && string(bytes.Trim(lookAhead, " ")) == "range sync.Interlocked" {
+		if p.got(LINTERLOCKED) {
 			isInterlocked = true
-			p.advance()
-		} 
+		}
+		
 		// LRANGE expr
 		r := Nod(ORANGE, nil, p.expr())
 		r.Etype = 0 // := flag
@@ -626,12 +623,10 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 		if rangeOk && p.got(LRANGE) {
 			isInterlocked := false
 
-			lookAhead, err := p.bin.Peek(len("range sync.Interlocked"))
-			// If the keyword "sync.Interlocked" is next, note it's presence and discard it
-			if err == nil && string(bytes.Trim(lookAhead, " ")) == "range sync.Interlocked" {
+			if p.got(LINTERLOCKED) {
 				isInterlocked = true
-				p.advance()
-			} 
+			}
+
 			// expr_list '=' LRANGE expr
 			r := Nod(ORANGE, nil, p.expr())
 			r.List.Set(lhs)
@@ -662,12 +657,10 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 		if rangeOk && p.got(LRANGE) {
 			isInterlocked := false
 
-			lookAhead, err := p.bin.Peek(len("range sync.Interlocked"))
-			// If the keyword "sync.Interlocked" is next, note it's presence and discard it
-			if err == nil && string(bytes.Trim(lookAhead, " ")) == "range sync.Interlocked" {
+			if p.got(LINTERLOCKED) {
 				isInterlocked = true
-				p.advance()
-			} 
+			}
+
 			// expr_list LCOLAS LRANGE expr
 			r := Nod(ORANGE, nil, p.expr())
 			r.List.Set(lhs)
@@ -993,27 +986,28 @@ func (p *parser) for_stmt() *Node {
 }
 
 /*
-	Interlocked = "sync.Interlocked" ExpressionList Block .
+	Interlocked = "sync.Interlocked" Expr Block .
 
 	ExpressionList needs to be concurrent maps
 */
 func (p *parser) interlocked_stmt() *Node {
 	p.want(LINTERLOCKED)
 	markdcl()
-	// Obtain the parameter list passed
-	args := p.expr_list()
-	// Empty argument list is bad
-	if len(args) == 0 {
-		Yyerror("sync.Interlocked requires at least one map parameter!")
+	if p.tok != LNAME {
+		Yyerror("sync.Interlocked [MAP_SYMBOL] { ... }")
 	}
+	
+	// Interlocked node, takes argument in Right, and the body inside it's Nbody
+	stmt := Nod(OINTERLOCKED, p.name(), nil)
+	
+	// Obtain the body
+	p.want('{')
+	body := p.stmt_list()
+	p.want('}')
 
-	stmt := Nod(OINTERLOCKED, nil, nil)
-	// The maps to interlock is kept in the node's List field
-	stmt.List.Set(args)
-	// While technically this is not a loop, loop_body handles parsing everything
-	body := p.loop_body("interlock clause")
-	// The body will be walked in walk.go
+	// Add body to OINTERLOCKED
 	stmt.Nbody.Append(body...)
+	popdcl()
 	return stmt
 }
 
@@ -2641,7 +2635,6 @@ func (p *parser) stmt() *Node {
 	
 	// L.J: Concurrent Map critical section
 	case LINTERLOCKED:
-		Yyerror("sync.Interlocked recognized!")
 		return p.interlocked_stmt()
 
 	case ';':

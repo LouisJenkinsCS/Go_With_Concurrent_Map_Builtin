@@ -452,11 +452,17 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
         if pos.idx == pos.startIdx {
             // If we wrapped all the way to the root, we found nothing
             if pos.arr == &cmap.root {
-                goto empty
+                it.key = nil
+                it.value = nil     
+                return
             }
 
-            // Otherwise, we need to go back up one recursive bucketArray
-            goto pop
+            // Otherwise, we need to go back up one recursive bucketArray. Pop to restore iterator position
+            len--
+            pos = stackPos[len]
+
+            // Start over from the upper-level bucketArray
+            goto next
         }
 
         // Read ahead of time if we should skip to the next or attempt to lock and acquire (Test-And-Test-And-Set)
@@ -482,8 +488,19 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                     continue
                 }
 
-                // Once ARRAY is set and it is not locked, it can never change
-                goto push
+                // Once ARRAY is set and it is not locked, it can never change. Push the current position on stack
+                if len == uintptr(cap(stackPos)) {
+                    stackPos = append(stackPos, pos)
+                } else {
+                    stackPos[len] = pos
+                }
+                len++
+
+                // The current position's bucketArray is the current header's bucket
+                pos.arr = (*bucketArray)(hdr.bucket)
+
+                // Setup on recurisve bucektArray
+                goto setup
             }
 
             // Test-And-Test-And-Set acquire lock
@@ -496,8 +513,39 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                         goto next
                     }
 
-                    // If it has been found, we're golden
-                    goto found
+                    // If it has been found, we're golden. We need to also push the current iterator position for cmapiternext to use
+                    if len == uintptr(cap(stackPos)) {
+                        stackPos = append(stackPos, pos)
+                    } else {
+                        stackPos[len] = pos
+                    }
+                    
+                    // Disable preemption to avoid needless contention if we lose timeslice
+                    m := acquirem()
+
+                    // Finally setup the concurrentIterator and release lock
+                    typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
+                    
+                    // Release bucket lock
+                    atomic.Storeuintptr(&hdr.info, 0)
+
+                    // Disable preemption
+                    releasem(m)
+
+                    // Set the stack of iterator positions for cmapiternext to use
+                    citer.stackPos = stackPos
+                    citer.len = len
+
+                    // Set the key and value
+                    for i := 0; i < MAXCHAIN; i++ {
+                        if citer.data.hash[i] != 0 {
+                            it.key = citer.data.key(t, uintptr(i))
+                            it.value = citer.data.value(t, uintptr(i))
+                            citer.offset = uintptr(i)
+                            return
+                        }
+                    }
+                    throw("Iterated over bucketData, but no key-value found")
                 }
             }
 
@@ -507,62 +555,6 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                 backoff *= 2
             }
         }
-
-    pop:
-        // Pop information off stacks
-        len--
-        pos = stackPos[len]
-
-        // Start over from the upper-level bucketArray
-        goto next
-    push:
-        // Push the current position on stack
-        if len == uintptr(cap(stackPos)) {
-            stackPos = append(stackPos, pos)
-        } else {
-            stackPos[len] = pos
-        }
-        len++
-
-        // The current position's bucketArray is the current header's bucket
-        pos.arr = (*bucketArray)(hdr.bucket)
-
-        // Setup on recurisve bucektArray
-        goto setup
-    // 'empty' label is called if and only if we have exhausted our search and came up with nothing
-    empty:
-        it.key = nil
-        it.value = nil
-        
-        return
-    // 'found' label is called if and only if we have found a non-nil bucketData (note we also need to release lock)
-    found:
-        // We need to also push the current pos on top of the stackPos
-        if len == uintptr(cap(stackPos)) {
-            stackPos = append(stackPos, pos)
-        } else {
-            stackPos[len] = pos
-        }
-        
-        // Finally setup the concurrentIterator and release lock
-        typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
-        atomic.Storeuintptr(&hdr.info, 0)
-
-        // Set the position stack
-        citer.stackPos = stackPos
-        citer.len = len
-
-        // Set the key and value
-        for i := 0; i < MAXCHAIN; i++ {
-            if citer.data.hash[i] != 0 {
-                it.key = citer.data.key(t, uintptr(i))
-                it.value = citer.data.value(t, uintptr(i))
-                citer.offset = uintptr(i)
-                return
-            }
-        }
-
-        return
 }
 
 /*
@@ -660,6 +652,7 @@ func cmapiternext(it *hiter) {
         // If the offset == MAXCHAIN, then we exhausted this bucketData, reset offset for next one 
         citer.offset = 0
     
+    // 'setup' goto label is called to setup the iterator position and performs wrapping checks. This may be skipped if done manually.
     setup:
         // Pop the current position off the stack
         // println("g #", getg().goid, ": citer.len: ", citer.len, ";len: ", len(citer.stackPos), ";cap: ", cap(citer.stackPos))
@@ -669,14 +662,19 @@ func cmapiternext(it *hiter) {
         if pos.idx == pos.startIdx {
             // If this is the root, we can't pop anymore
             if pos.arr == root {
-                goto done
+                it.key = nil
+                it.value = nil
+                return
             } else {
-                goto pop
+                // Discard the current position (pop)
+                citer.len--
+
+                goto setup
             }
         }
-
+    
+    // 'next' goto label is called to advance the iterator to the next bucketArray.
     next:
-
         hdr = &pos.arr.data[pos.idx]
         pos.idx = (pos.idx + 1) % uintptr(pos.arr.size)
 
@@ -703,8 +701,18 @@ func cmapiternext(it *hiter) {
                     continue
                 }
 
-                // Once ARRAY is set and it is not locked, it can never change
-                goto push
+                // Once ARRAY is set and it is not locked, it can never change. Setup new iterator position and push.
+                citer.len++
+                if citer.len == uintptr(cap(citer.stackPos)) {
+                    citer.stackPos = append(citer.stackPos, iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)})
+                } else {
+                    citer.stackPos[citer.len] = iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)}
+                }
+
+                // Note above that idx == startIdx, hence we explicitly skip the 'setup' portion and set pos ourselves
+                pos = &citer.stackPos[citer.len]
+
+                goto next
             }
 
             // Test-And-Test-And-Set acquire lock
@@ -717,8 +725,18 @@ func cmapiternext(it *hiter) {
                         goto setup
                     }
 
-                    // If it has been found, we're golden
-                    goto found
+                    // We've found what we're looking for. Disable preemption to avoid unnecessary contention if we lose timeslice while copying
+                    m := acquirem()
+                    // Make a copy of the bucketData
+                    typedmemmove(t.bucketdata, unsafe.Pointer(data), hdr.bucket)
+                    
+                    // Unlock bucket
+                    atomic.Storeuintptr(&hdr.info, 0)
+
+                    // Enable preemption
+                    releasem(m)
+
+                    goto findKeyValue
                 }
             }
 
@@ -728,38 +746,6 @@ func cmapiternext(it *hiter) {
                 backoff *= 2
             }
         }
-
-    pop:
-        // Discard the current position
-        citer.len--
-
-        goto setup
-    push:
-        // Setup a new position to push on stack
-        citer.len++
-        if citer.len == uintptr(cap(citer.stackPos)) {
-            citer.stackPos = append(citer.stackPos, iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)})
-        } else {
-            citer.stackPos[citer.len] = iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)}
-        }
-
-        // Note above that idx == startIdx, hence we explicitly skip the 'setup' portion and set pos ourselves
-        pos = &citer.stackPos[citer.len]
-
-        goto next
-
-    done:
-        it.key = nil
-        it.value = nil
-        return
-    found:
-        // Make a copy of the bucketData
-        typedmemmove(t.bucketdata, unsafe.Pointer(data), hdr.bucket)
-
-        // Unlock bucket
-        atomic.Storeuintptr(&hdr.info, 0)
-
-        goto findKeyValue
 }
 
 func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {

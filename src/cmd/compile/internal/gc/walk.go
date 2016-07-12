@@ -289,6 +289,10 @@ func walkstmt(n *Node) *Node {
 		n.Left = walkexpr(n.Left, &n.Ninit)
 		walkstmtlist(n.Nbody.Slice())
 		walkstmtlist(n.Rlist.Slice())
+	
+	case OINTERLOCKED:
+		n.Left = walkexpr(n.Left, &n.Ninit)
+		walkstmtlist(n.Nbody.Slice())
 
 	case OPROC:
 		switch n.Left.Op {
