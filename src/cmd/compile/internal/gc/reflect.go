@@ -316,10 +316,11 @@ func bucketData(t *Type) *Type {
 	keyArr.Noalg = true
 	valArr.Noalg = true
 
-	var field [3]*Field
+	var field [4]*Field
 	field[0] = makefield("hash", typArray(Types[TUINTPTR], int64(nChains)))
-	field[1] = makefield("keys", keyArr)
-	field[2] = makefield("values", valArr)
+	field[1] = makefield("readers", Types[TUINTPTR])
+	field[2] = makefield("keys", keyArr)
+	field[3] = makefield("values", valArr)
 
 	bdata.SetFields(field[:])
 	dowidth(bdata)

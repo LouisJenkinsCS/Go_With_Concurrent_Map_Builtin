@@ -23,16 +23,15 @@ const (
     // The maximum amount of buckets in a bucketData
     MAXCHAIN = 8
 
-    CHAINED = 0
+    // bucketHdr is unlocked and points to a bucketData
+    UNLOCKED = 0
     // bucketHdr's 'b' is a bucketArray. Note that once this is true, it always remains so.
-    ARRAY = 1 << 0
-    // If the bucketHdr's 'b' is locked, another goroutine is currently accessing it.
-    LOCKED = 1 << 1
+    RECURSIVE = 1 << 0
+    // If the bucketHdr's bucket is a bucketData, and is held by an iterator
+    ITERATOR = 1 << 1
 
-    // bucketData is unused
-    UNUSED = 0
-    // bucketData is in use
-    USED = 1 << 0
+    // If currHash is equal to this, it is not in use
+    EMPTY = 0
 
     // Maximum spins until exponential backoff kicks in
     BACKOFF_AFTER_SPINS = 0
@@ -46,39 +45,48 @@ const (
 
 var DUMMY_RETVAL [MAXZERO]byte
 
+/*
+    bucketHdr is a header for each bucket, wherein it may point to either a bucketData or bucketArray depending on it's
+    'lock' field. 'lock' can only be in one of the following states, all of which must be set/checked atomically...
+    
+    UNLOCKED:
+        The bucket is uncontested (for now), and anyone may attempt to acquire it by setting the pointer to it's 'g'.
+    OWNED:
+        A Goroutine has set it's pointer to it's 'g', meaning it owns this header. This may ONLY happen when UNLOCKED.
+        From here, it may mark the ITERATOR or RECURSIVE bit however it may please.
+    ITERATOR:
+        An iterator currently owns this bucket, and may allow other iterators through, or even readers, so long as they atomically
+        check if 'readers' > 0, as 'readers' is only 0 if the original owner has already left (and unlocked and unmarked) the bucket.
+        It is the job of the last 'reader' to unmark the ITERATOR bit when finished.
+    RECURSIVE:
+        The bucket has been converted, and the header now points to, a recursive bucektArray. This is a unique bit in that once it
+        is set, it will no longer be unset.
+*/
 type bucketHdr struct {
-    // Is either a bucketArray or bucketData
+    // The spinlock that each Goroutine will attempt to mutate in some way before making modifications on bucket
+    lock uintptr
+    // A count of readers currently occupying the below bucket (can only be non-zero if lock's ITERATOR bit is set)
+    readers uintptr
+    // The bucket (bucketData or bucketArray) this bucketHdr points to
     bucket unsafe.Pointer
-    /*
-    	Recursive Lock Variant:
-	        The least significant 3 bits are used as flags and the rest
-	        are a pointer to the current 'g' that holds the lock. The 'g' is
-	        used to allow it to become reentrant.
-	
-	        Checking the lock can be as easy as masking out the first three bits.
-	        An overall CAS can also make it easier to tell when it is no longer locked,
-	        as as soon as the 'g' holding the lock finishes, it will zero the portion
-	        used to store the address. This can cause the CAS to fail during a spin
-	        and be used to detect if manages to acquire the lock.
-	        
-    	Non-Recursive Lock Variant:
-    		The least significant 3 bits are used as flags, while the rest remain unused.
-    		
-    		Checking the lock is more efficient in that it only needs to attempt to CAS
-    		this flag from 0 to LOCKED. Since this flag shares ARRAY bit, if ARRAY bit is ever
-    		set, it becomes impossible to CAS from 0 to LOCKED, as 0 != ARRAY, and hence will
-    		always fail, meaning a simple CAS can check both if it is LOCKED or if it is an
-    		ARRAY, and even attempt to acquire the lock all in the same instruction.
-    */
-    info uintptr
 }
 
+/*
+    bucketArray is a contiguous region of bucketHdr's, used to act as lookup for hashing keys to their
+    corresponding values. Each bucketArray has it's own 'seed', which is used when hashing the key to their
+    next index, as this greatly reduces overall collision. Each bucketArray, as they can be RECURSIVE, keep
+    a backlink to their previous bucketArray and the backIdx of the indice that pointed to this bucketArray.
+    The backIdx and backLink must be set by the Goroutine that setup this data.
+*/
 type bucketArray struct {
+    // A contiguous region of bucketHdr's
     data []bucketHdr
     // Seed is different for each bucketArray to ensure that the re-hashing resolves to different indice
     seed uint32
-    // Size of the current slice of bucketHdr's
-    size uint32
+    // Associated with the backlink (see below), used to signify what index the bucketHdr that pointed to this is
+    backIdx uint32
+    // Pointer to the previous bucketArray that pointed to this, if there is one.
+    backLink *bucketArray
 }
 
 /*
@@ -108,15 +116,6 @@ type concurrentIterator struct {
     offset uintptr
     // The bucketData we are iterating over
     data bucketData
-}
-
-type iteratorPosition struct {
-    // Current index in the bucketArray we will process next
-    idx uintptr
-    // The index we started on, I.E the one we wrap up to until we consider a bucketArray exhausted
-    startIdx uintptr
-    // The bucketArray we are currently processing
-    arr *bucketArray
 }
 
 func (data *bucketData) key(t *maptype, idx uintptr) unsafe.Pointer {
@@ -226,7 +225,8 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
     hash := t.key.alg.hash(key, uintptr(arr.seed))
     idx := hash % uintptr(arr.size)
     hdr := &(arr.data[idx])
-    // g := getg().m.curg
+    g := getg().m.curg
+    gptr := uintptr(unsafe.Pointer(g))
     spins := 0
     var backoff int64 = 1
 
@@ -234,14 +234,14 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
 
     for {
             flags := atomic.Loaduintptr(&hdr.info)
+            lockHolder := flags &^ uintptr(0x7)
 
-            // If is an ARRAY
-            if (flags & ARRAY) != 0 {
+            // If is an RECURSIVE bucketArray
+            if (flags & RECURSIVE) != 0 {
                 // In process of conversion
-                if (flags & LOCKED) != 0 {
+                if lockHolder != 0 {
                     spins++
 
-                    // 
                     if spins > BACKOFF_AFTER_SPINS {
                         timeSleep(backoff)
                         backoff *= 2
@@ -255,10 +255,23 @@ func (arr *bucketArray) findBucket(t *maptype, key unsafe.Pointer) (*bucketHdr, 
                 return (*bucketArray)(hdr.bucket).findBucket(t, key)
             }
 
+            // If an iterator holds this bucket, we spin
+            if (flags & ITERATOR) != 0 {
+                if spins > BACKOFF_AFTER_SPINS {
+                    timeSleep(backoff)
+                    backoff *= 2
+                }
+            }
+
+            // Recursive locking; This cannot change (as its not possible for someone else to steal our lock)
+            if lockHolder == gptr {
+                return &(arr.data[idx]), hash, uintptr(arr.size)
+            }
+
             // Test-And-Test-And-Set acquire lock
-            if (flags & LOCKED) == 0 {
+            if lockHolder == 0 {
                 // If we acquired the lock successfully
-                if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+                if atomic.Casuintptr(&hdr.info, 0, gptr) {
                     getg().releaseBucket = unsafe.Pointer(hdr)
                     if spins > 0 {
                         // println(".........g #", getg().goid, ": wasted ", spins, " CPU cycles spinning")
@@ -337,8 +350,8 @@ func (hdr *bucketHdr) dataToArray(t *maptype, size uintptr, equal func (k1, k2 u
         }
     }
 
-    // Set the ARRAY bit, release lock
-    atomic.Storeuintptr(&hdr.info, ARRAY)
+    // Set the RECURSIVE bit, release lock
+    atomic.Storeuintptr(&hdr.info, RECURSIVE)
 }
 
 func (it *concurrentIterator) nextKeyValue(t *maptype) (unsafe.Pointer, unsafe.Pointer) {
@@ -472,14 +485,17 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
 
         backoff = 1
         spins = 0
+        g := getg()
+        gptr := uintptr(unsafe.Pointer(g))
 
         for {
             flags := atomic.Loaduintptr(&hdr.info)
+            lockHolder := flags &^ 0x7
 
-            // If is an ARRAY
-            if (flags & ARRAY) != 0 {
+            // If is an RECURSIVE
+            if (flags & RECURSIVE) != 0 {
                 // In process of conversion
-                if (flags & LOCKED) != 0 {
+                if lockHolder != 0 {
                     spins++
                     if spins > BACKOFF_AFTER_SPINS {
                         timeSleep(backoff)
@@ -488,7 +504,7 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                     continue
                 }
 
-                // Once ARRAY is set and it is not locked, it can never change. Push the current position on stack
+                // Once RECURSIVE is set and it is not locked, it can never change. Push the current position on stack
                 if len == uintptr(cap(stackPos)) {
                     stackPos = append(stackPos, pos)
                 } else {
@@ -503,15 +519,60 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                 goto setup
             }
 
+            // If another iterator owns this bucket, attempt to get in
+            if (flags & ITERATOR) != 0 {
+                // We know from the fact that if ITERATOR bit is set, then it points to bucketData
+                data := (*bucketData)(hdr.bucket)
+
+                // If data == nil, the bucket could have been released and another thread could potentially have deleted it
+                if data == nil {
+                    return
+                }
+                
+                // Fetch readers; If it is 0, then the holder who originally owned it no longer does, and so we try again
+                readers := atomic.Loaduintptr(&data.readers)
+                if readers == 0 {
+                    continue
+                }
+                
+                // If in this snapshot, readers != 0, attempt to increment count
+                if atomic.Casuintptr(&data.readers, readers, readers + 1) {
+                    // If we succeed, we may safely read the data. Boilerplate copy...
+                    typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), unsafe.Pointer(data))
+                    
+                    // Decrement our count over the lock
+                    for {
+                        newCount := atomic.Loaduintptr(&data.readers)
+                        if newCount == 0 {
+                            throw("Bad reader counter (attempted to decrement at 0)")
+                        }
+                        if atomic.Casuintptr(&data.readers, newCount, newCount - 1) {
+                            // If we succeed, and newCount was 1, then we just decremented it to 0 and we are last ones out
+                            if newCount == 1 {
+                                // It is our job to unmark this bucket.
+                                atomic.Storeuintptr(&hdr.info, 0)
+                            }
+                            break;
+                        }
+                    }
+                }
+                continue
+            }
+
             // Test-And-Test-And-Set acquire lock
-            if (flags & LOCKED) == 0 {
-                // If we acquired the lock successfully
-                if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+            if lockHolder == 0 {
+                // We must first check if the bucket pointed to by hdr is nil, which requires the lock
+                if atomic.Casuintptr(&hdr.info, 0, gptr) {
                     // If the bucket is nil, release the lock and try again
                     if hdr.bucket == nil {
                         atomic.Storeuintptr(&hdr.info, 0)
                         goto next
                     }
+
+                    // Otherwise, since we already own this bucket, update it's readers and mark the bucket
+                    data := (*bucketData)(hdr.bucket)
+                    data.readers++
+                    atomic.Storeuintptr(&hdr.info, ITERATOR)
 
                     // If it has been found, we're golden. We need to also push the current iterator position for cmapiternext to use
                     if len == uintptr(cap(stackPos)) {
@@ -519,18 +580,23 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
                     } else {
                         stackPos[len] = pos
                     }
-                    
-                    // Disable preemption to avoid needless contention if we lose timeslice
-                    m := acquirem()
 
                     // Finally setup the concurrentIterator and release lock
-                    typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
+                    typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), unsafe.Pointer(data))
                     
-                    // Release bucket lock
-                    atomic.Storeuintptr(&hdr.info, 0)
+                    // Decrement our count over the lock
+                    for {
+                        newCount := atomic.Loaduintptr(&data.readers)
+                        if atomic.Casuintptr(&data.readers, newCount, newCount - 1) {
+                            // If we succeed, and newCount was 1, then we just decremented it to 0 and we are last ones out
+                            if newCount == 1 {
+                                // It is our job to unmark this bucket.
+                                atomic.Storeuintptr(&hdr.info, 0)
+                            }
+                            break;
+                        }
+                    }
 
-                    // Disable preemption
-                    releasem(m)
 
                     // Set the stack of iterator positions for cmapiternext to use
                     citer.stackPos = stackPos
@@ -685,14 +751,17 @@ func cmapiternext(it *hiter) {
 
         spins = 0
         backoff = 1
+        g := getg()
+        gptr := uintptr(unsafe.Pointer(g))
 
         for {
             flags := atomic.Loaduintptr(&hdr.info)
+            lockHolder := flags &^ 0x7
 
-            // If is an ARRAY
-            if (flags & ARRAY) != 0 {
+            // If is an RECURSIVE
+            if (flags & RECURSIVE) != 0 {
                 // In process of conversion
-                if (flags & LOCKED) != 0 {
+                if lockHolder != 0 {
                     spins++
                     if spins > BACKOFF_AFTER_SPINS {
                         timeSleep(backoff)
@@ -701,7 +770,7 @@ func cmapiternext(it *hiter) {
                     continue
                 }
 
-                // Once ARRAY is set and it is not locked, it can never change. Setup new iterator position and push.
+                // Once RECURSIVE is set and it is not locked, it can never change. Setup new iterator position and push.
                 citer.len++
                 if citer.len == uintptr(cap(citer.stackPos)) {
                     citer.stackPos = append(citer.stackPos, iteratorPosition{0, 0, (*bucketArray)(hdr.bucket)})
@@ -715,26 +784,76 @@ func cmapiternext(it *hiter) {
                 goto next
             }
 
+            // If another iterator owns this bucket, attempt to get in
+            if (flags & ITERATOR) != 0 {
+                // We know from the fact that if ITERATOR bit is set, then it points to bucketData
+                data := (*bucketData)(hdr.bucket)
+                
+                // However, if data == nil, then the bucket was released, and another thread could potentially have deleted it
+                if data == nil {
+                    continue
+                }
+
+                // Fetch readers; If it is 0, then the holder who originally owned it no longer does, and so we try again
+                readers := atomic.Loaduintptr(&data.readers)
+                if readers == 0 {
+                    continue
+                }
+                
+                // If in this snapshot, readers != 0, attempt to increment count
+                if atomic.Casuintptr(&data.readers, readers, readers + 1) {
+                    // If we succeed, we may safely read the data. Boilerplate copy...
+                    typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), unsafe.Pointer(data))
+                    
+                    // Decrement our count over the lock
+                    for {
+                        newCount := atomic.Loaduintptr(&data.readers)
+                        if newCount == 0 {
+                            throw("Bad reader counter (attempted to decrement at 0)")
+                        }
+                        if atomic.Casuintptr(&data.readers, newCount, newCount - 1) {
+                            // If we succeed, and newCount was 1, then we just decremented it to 0 and we are last ones out
+                            if newCount == 1 {
+                                // It is our job to unmark this bucket.
+                                atomic.Storeuintptr(&hdr.info, 0)
+                            }
+                            break;
+                        }
+                    }
+                }
+                continue
+            }
+
             // Test-And-Test-And-Set acquire lock
-            if (flags & LOCKED) == 0 {
-                // If we acquired the lock successfully
-                if atomic.Casuintptr(&hdr.info, 0, LOCKED) {
+            if lockHolder == 0 {
+                // We must first check if the bucket pointed to by hdr is nil, which requires the lock
+                if atomic.Casuintptr(&hdr.info, 0, gptr) {
                     // If the bucket is nil, release the lock and try again
                     if hdr.bucket == nil {
                         atomic.Storeuintptr(&hdr.info, 0)
-                        goto setup
+                        goto next
                     }
 
-                    // We've found what we're looking for. Disable preemption to avoid unnecessary contention if we lose timeslice while copying
-                    m := acquirem()
-                    // Make a copy of the bucketData
-                    typedmemmove(t.bucketdata, unsafe.Pointer(data), hdr.bucket)
-                    
-                    // Unlock bucket
-                    atomic.Storeuintptr(&hdr.info, 0)
+                    // Otherwise, since we already own this bucket, update it's readers and mark the bucket
+                    data := (*bucketData)(hdr.bucket)
+                    data.readers++
+                    atomic.Storeuintptr(&hdr.info, ITERATOR)
 
-                    // Enable preemption
-                    releasem(m)
+                    // Make a copy of the bucketData
+                    typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), unsafe.Pointer(data))
+                    
+                    // Decrement our count over the lock
+                    for {
+                        newCount := atomic.Loaduintptr(&data.readers)
+                        if atomic.Casuintptr(&data.readers, newCount, newCount - 1) {
+                            // If we succeed, and newCount was 1, then we just decremented it to 0 and we are last ones out
+                            if newCount == 1 {
+                                // It is our job to unmark this bucket.
+                                atomic.Storeuintptr(&hdr.info, 0)
+                            }
+                            break;
+                        }
+                    }
 
                     goto findKeyValue
                 }
@@ -773,56 +892,137 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
     // println("g #", getg().goid, ": cmapassign1")
     // println("...g #", getg().goid, ": Adding Key: ", toKeyType(key).x, "," ,  toKeyType(key).y, " and Value: ", toKeyType(val).x, ",", toKeyType(val).y)
     cmap := (*concurrentMap)(h.chdr)
-    root := &cmap.root
-    hdr, hash, sz := root.findBucket(t, key)
-    
-    // If bucket is nil, then we allocate a new one.
-    if hdr.bucket == nil {
-        hdr.bucket = unsafe.Pointer(newobject(t.bucketdata))
+    arr := &cmap.root
+    var hash, idx, spins uintptr
+    var backoff int64
+    var hdr *bucketHdr
+    g := getg()
+    gptr := uintptr(unsafe.Pointer(g))
+
+    next :
+        // Obtain the hash, index, and bucketHdr.
+        hash = t.key.alg.hash(key, arr.seed)
+        idx = hash % uintptr(len(arr.data))
+        hdr = &arr.data[idx]
+        spins = 0
+        backoff = 1
+
+        // Attempt to acquire lock
+        for {
+            lock := atomic.Loaduintptr(&hdr.lock)
+
+            // If it's recursive, try again on new bucket
+            if lock == RECURSIVE {
+                arr = (*bucketArray)(hdr.bucket)
+                goto next
+            }
+            
+            // If we hold the lock
+            if lock == gptr {
+                break
+            }
+
+            // If the lock is uncontested
+            if lock == UNLOCKED  {
+                // Attempt to acquire
+                if atomic.Casuintptr(&hdr.lock, 0, gptr) {
+                    g.releaseBucket = unsafe.Pointer(hdr)
+                    break
+                }
+            }
+
+            if spins > BACKOFF_AFTER_SPINS {
+                timeSleep(backoff)
+                backoff *= 2
+            }
+            spins++
+        }
         
-        // Since we just created a new bucket, directly add the key and value to the map
-        (*bucketData)(hdr.bucket).assign(t, 0, hash, key, val)
-        atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
-        return
-    }
-
-    data := (*bucketData)(hdr.bucket)
-    firstEmpty := -1
-    // Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
-    for i := 0; i < MAXCHAIN; i++ {
-        currHash := data.hash[i]
-        // The hash is 0 if it is not in use
-        if currHash == 0 {
-            // Keep track of the first empty so we know what to assign into if we do not find a match
-            if firstEmpty == -1 {
-                firstEmpty = i
-            }
-            continue
+        // If bucket is nil, then we allocate a new one.
+        if hdr.bucket == nil {
+            hdr.bucket = newobject(t.bucketdata)
+            
+            // Since we just created a new bucket, directly add the key and value to the map
+            (*bucketData)(hdr.bucket).assign(t, 0, hash, key, val)
+            atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
+            return
         }
 
-        // If the hash matches, check to see if keys are equal
-        if hash == data.hash[i] {
-            otherKey := data.key(t, uintptr(i))
+        data := (*bucketData)(hdr.bucket)
+        firstEmpty := -1
 
-            // If they are equal, update...
-            if t.key.alg.equal(key, otherKey) {
-                data.update(t, uintptr(i), key, val)
-                return
+        // Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
+        for i := 0; i < MAXCHAIN; i++ {
+            currHash := data.hash[i]
+            if currHash == EMPTY {
+                // Keep track of the first empty so we know what to assign into if we do not find a match
+                if firstEmpty == -1 {
+                    firstEmpty = i
+                }
+                continue
+            }
+
+            // If the hash matches, check to see if keys are equal
+            if hash == data.hash[i] {
+                otherKey := data.key(t, uintptr(i))
+
+                // If they are equal, update...
+                if t.key.alg.equal(key, otherKey) {
+                    data.update(t, uintptr(i), key, val)
+                    return
+                }
             }
         }
-    }
 
-    // If firstEmpty is still -1, that means we did not find any empty slots, and should convert immediate
-    if firstEmpty == -1 {
-        // When we convert dataToArray, it's size is double the previous
-        hdr.dataToArray(t, sz * 2, t.key.alg.equal)
-    
-        // Also we can save effort by just recursively calling this again.
-        cmapassign1(t, h, key, val)  
-        return
-    }
+        // If firstEmpty is still -1, that means we did not find any empty slots, and should convert immediate
+        if firstEmpty == -1 {
+            // Allocate and initialize
+            newArr := (*bucketArray)(newobject(t.bucketArray))
+            newArr.data = make([]bucketHdr, arr.size * 2)
+            newArr.seed = fastrand1()
+            newArr.backLink = arr
+            newArr.backIdx = uint32(idx)
 
-    // At this point, firstEmpty is guaranteed to be non-zero, hence we can safely assign it
+            // Rehash and move all key-value pairs
+            for i := 0; i < MAXCHAIN; i++ {
+                k := data.key(t, uintptr(i))
+                v := data.value(t, uintptr(i))
+
+                // Rehash the key to the new seed
+                newHash := t.key.alg.hash(key, newArr.seed)
+                newIdx := newHash % uintptr(len(newArr.data))
+                newHdr := &newArr.data[newIdx]
+                newData := (*bucketData)(newHdr.bucket)
+                
+                // Check if the bucket is nil, meaning we haven't allocated to it yet.
+                if newData == nil {
+                    newData = (*bucketData)(newobject(t.bucketdata))
+                    newData.assign(t, 0, newHash, k, v)
+                    continue
+                }
+
+                // If it is not nil, then we must scan for the first non-empty slot
+                for j := 0; j < MAXCHAIN; j++ {
+                    currHash := newData.hash[j]
+                    if currHash != EMPTY {
+                        newData.assign(t, uintptr(j), newHash, k, v)
+                        break
+                    }
+                }
+            }
+
+            // Now dispose of old data and update the header's bucket
+            memclr(data, t.bucketdata.size)
+            hdr.bucket = newArr
+            
+            // Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for the key-value pairs.
+            // In this case, simply mark the bucket as RECURSIVE and try again, to reduce contention and increase concurrency over the lock
+            arr = newArr
+            atomic.Storeuintptr(&hdr.lock, RECURSIVE)
+            goto next
+        }
+
+    // At this point, firstEmpty is guaranteed to be non-zero and within bounds, hence we can safely assign to it
     data.assign(t, uintptr(firstEmpty), hash, key, val)
 }
 
@@ -834,7 +1034,7 @@ func maprelease() {
         
         // Atomically release lock
         flags := atomic.Loaduintptr(&hdr.info)
-        atomic.Storeuintptr(&hdr.info, uintptr(flags &^ LOCKED))
+        atomic.Storeuintptr(&hdr.info, uintptr(flags & 0x7))
 
         g.releaseBucket = nil
         // releasem(g.releaseM)
@@ -901,36 +1101,103 @@ func cmapaccess2_faststr(t *maptype, h *hmap, key string) (unsafe.Pointer, bool)
 func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) (unsafe.Pointer, bool) {
     // println("...g #", getg().goid, ": Searching for Key: ", toKeyType(key).x, "," ,  toKeyType(key).y)
     cmap := (*concurrentMap)(h.chdr)
-    root := &cmap.root
-    hdr, hash, _ := root.findBucket(t, key)
+    arr := &cmap.root
+    var hash, idx, spins uintptr
+    var backoff int64
+    var hdr *bucketHdr
+    g := getg()
+    gptr := uintptr(unsafe.Pointer(g))
 
-    // If the bucket is nil, then it is empty, stop here
-    if hdr.bucket == nil {
-        return unsafe.Pointer(&DUMMY_RETVAL[0]), false
-    }
+    next:
+        // Obtain the hash, index, and bucketHdr
+        hash = t.key.alg.hash(key, arr.seed)
+        idx = hash % uintptr(len(arr.data))
+        hdr = &arr.data[idx]
+        spins = 0
+        backoff = 1
 
-    data := (*bucketData)(hdr.bucket)
-    for i := 0; i < MAXCHAIN; i++ {
-        currHash := data.hash[i]
+        // Save time by looking ahead of time (testing) if the header is nil
+        if atomic.Loadp(&hdr.bucket) == nil {
+            return unsafe.Pointer(&DUMMY_RETVAL[0]), false
+        }
         
-        // Check if the hashes are equal
-        if currHash == hash {
-            otherKey := data.key(t, uintptr(i))
-
-            // Perform indirection on otherKey if necessary
-            if t.indirectkey {
-                otherKey = *(*unsafe.Pointer)(otherKey)
+        // Attempt to acquire lock
+        for {
+            lock := atomic.Loaduintptr(&hdr.lock)
+            
+            // If it's recursive, try again on new bucket
+            if lock == RECURSIVE {
+                arr = (*bucketArray)(hdr.bucket)
+                goto next
             }
 
-            // If the keys are equal
-            if equal(key, otherKey) {
-                return data.value(t, uintptr(i)), true
+            // If we hold the lock
+            if lock == gptr {
+                break
+            }
+
+            // If the lock is held by an iterator, we can attempt to go through as a reader
+            if lock == ITERATOR {
+                readers := atomic.Loaduintptr(&hdr.readers)
+                
+                // If the reader counter is 0, then the last reader has already exited; loop again, no backoff
+                if readers == 0 {
+                    continue
+                }
+                
+                // Attempt to get in as a reader.
+                if atomic.Casuintptr(&hdr.readers, readers, readers + 1) {
+                    g.releaseBucket = unsafe.Pointer(hdr)
+                    break
+                }
+                continue
+            }
+
+            // If the lock is uncontested
+            if lock == UNLOCKED  {
+                // Attempt to acquire
+                if atomic.Casuintptr(&hdr.lock, 0, gptr) {
+                    g.releaseBucket = unsafe.Pointer(hdr)
+                    break
+                }
+            }
+
+            if spins > BACKOFF_AFTER_SPINS {
+                timeSleep(backoff)
+                backoff *= 2
+            }
+            spins++
+        }
+
+        // If the bucket is nil, then it is empty, stop here
+        if hdr.bucket == nil {
+            return unsafe.Pointer(&DUMMY_RETVAL[0]), false
+        }
+
+        data := (*bucketData)(hdr.bucket)
+        
+        // Search the bucketData for the data needed
+        for i := 0; i < MAXCHAIN; i++ {
+            currHash := data.hash[i]
+            
+            // Check if the hashes are equal
+            if currHash == hash {
+                otherKey := data.key(t, uintptr(i))
+
+                // Perform indirection on otherKey if necessary
+                if t.indirectkey {
+                    otherKey = *(*unsafe.Pointer)(otherKey)
+                }
+
+                // If the keys are equal
+                if equal(key, otherKey) {
+                    return data.value(t, uintptr(i)), true
+                }
             }
         }
-    }
 
-    // Only get to this point if we have not found the value in the map
-    return unsafe.Pointer(&DUMMY_RETVAL[0]), false
+        // Only get to this point if we have not found the value in the map
+        return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 }
 
 
