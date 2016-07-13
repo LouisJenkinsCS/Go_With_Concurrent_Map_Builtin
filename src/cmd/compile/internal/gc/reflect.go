@@ -253,27 +253,10 @@ func concurrentIterator(t *Type) *Type {
 		return t.MapType().ConcurrentIterator
 	}
 
-	/*
-		type pos struct {
-			idx uintptr
-			arr *bucketArray
-		}
-
-		Used to keep track of the current bucketArray and index we are iterating in
-	*/
-	pos := typ(TSTRUCT)
-	pos.Noalg = true
-	var posField [3]*Field
-	posField[0] = makefield("idx", Types[TUINTPTR])
-	posField[1] = makefield("startIdx", Types[TUINTPTR])
-	posField[2] = makefield("arr", Ptrto(bucketArray(t)))
-	pos.SetFields(posField[:])
-	dowidth(pos)
-	
 	var field [4]*Field
-	field[0] = makefield("stackPos", typSlice(pos))
-	field[1] = makefield("len", Types[TUINTPTR])
-	field[2] = makefield("offset", Types[TUINTPTR])
+	field[0] = makefield("idx", Types[TUINT32])
+	field[1] = makefield("offset", Types[TUINT32])
+	field[2] = makefield("arr", Types[TUNSAFEPTR])
 	field[3] = makefield("data", bucketData(t))
 
 	citer := typ(TSTRUCT)
@@ -316,11 +299,10 @@ func bucketData(t *Type) *Type {
 	keyArr.Noalg = true
 	valArr.Noalg = true
 
-	var field [4]*Field
+	var field [3]*Field
 	field[0] = makefield("hash", typArray(Types[TUINTPTR], int64(nChains)))
-	field[1] = makefield("readers", Types[TUINTPTR])
-	field[2] = makefield("keys", keyArr)
-	field[3] = makefield("values", valArr)
+	field[1] = makefield("keys", keyArr)
+	field[2] = makefield("values", valArr)
 
 	bdata.SetFields(field[:])
 	dowidth(bdata)
@@ -336,9 +318,10 @@ func bucketHdr(t *Type) *Type {
 		return t.MapType().BucketHdr
 	}
 
-	var field [2]*Field
-	field[0] = makefield("bucket", Types[TUNSAFEPTR])
-	field[1] = makefield("info", Types[TUINTPTR])
+	var field [3]*Field
+	field[0] = makefield("lock", Types[TUINTPTR])
+	field[1] = makefield("readers", Types[TUINTPTR])
+	field[2] = makefield("bucket", Types[TUNSAFEPTR])
 
 	bhdr := typ(TSTRUCT)
 	bhdr.Noalg = true
@@ -359,10 +342,11 @@ func bucketArray(t *Type) *Type {
 	barr := typ(TSTRUCT)
 	barr.Noalg = true
 
-	var field [3]*Field
+	var field [4]*Field
 	field[0] = makefield("data", typSlice(bucketHdr(t)))
 	field[1] = makefield("seed", Types[TUINT32])
-	field[2] = makefield("size", Types[TUINT32])
+	field[2] = makefield("backIdx", Types[TUINT32])
+	field[3] = makefield("backLink", Types[TUNSAFEPTR])
 
 	barr.SetFields(field[:])
 	dowidth(barr)
