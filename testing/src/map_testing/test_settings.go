@@ -9,8 +9,8 @@ type point struct {
 }
 
 const (
-    ROWS = 8
-    COLS = 100000
+    ROWS = 32
+    COLS = 10000
     TESTS = 100
 )
 
@@ -65,6 +65,14 @@ func test_map_deletion_accuracy(m map[point]point) {
 
     if !passed {
         panic("Failed Deletion Accuracy Test!!!")
+    }
+}
+
+func nopFunction(k, v interface{}, depth int) {
+    if k != v {
+        nopFunction(v, v, depth + 1)
+    } else if depth < 100 {
+        nopFunction(k, v, depth + 1)
     }
 }
 

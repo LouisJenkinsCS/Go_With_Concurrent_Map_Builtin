@@ -7,10 +7,11 @@ import "time"
 import _ "../github.com/pkg/profile"
 
 var rwlock sync.RWMutex
+var rw_map map[point]point
 
 var rwc chan int
 
-func populate_map_rw_struct(m map[point]point) {
+func populate_map_rw_struct() {
 	for i := 0; i < ROWS; i++ {
 		go func (idx int) { 
 			for j := 0; j < COLS; j++ {
@@ -18,9 +19,9 @@ func populate_map_rw_struct(m map[point]point) {
 				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
 				rwlock.Lock()
 				// Adds a dummy value to test assignment
-				m[key] = point{0, 0}
+				rw_map[key] = point{0, 0}
 				// Adds real value to test update
-				m[key] = val
+				rw_map[key] = val
 				rwlock.Unlock()
 			}
 			c <- 0
@@ -28,13 +29,13 @@ func populate_map_rw_struct(m map[point]point) {
 	}
 }
 
-func delete_map_rw_struct(m map[point]point) {
+func delete_map_rw_struct() {
 	for i := 0; i < ROWS; i++ {
 		go func (idx int) {
 			for j := 0; j < COLS; j++ {
 				key := point{idx, j}
 				rwlock.Lock()
-				delete(m, key)
+				delete(rw_map, key)
 				rwlock.Unlock()
 			}
 			c <- 0
@@ -42,15 +43,16 @@ func delete_map_rw_struct(m map[point]point) {
 	}
 }
 
-func iterate_map_rw_struct(m map[point]point) {
+func iterate_map_rw_struct() {
 	for i := 0; i < ROWS; i++ {
 		go func () {
 			rwlock.RLock()
-			for k, v := range m {
+			for k, v := range rw_map {
 				expected := point{ROWS - k.x, COLS - k.y}
 				if v != expected {
 					panic(fmt.Sprintf("Expected %v for key %v, but received %v", expected, k, v))
 				}
+				nopFunction(k, v, 1)
 			}
 			rwlock.RUnlock()
 			c <- 0
@@ -58,7 +60,7 @@ func iterate_map_rw_struct(m map[point]point) {
 	}
 }
 
-func test_map_insertion_accuracy_rw(m map[point]point) {
+func test_map_insertion_accuracy_rw() {
     passed := true
     c := make(chan int)
 	for i := 0; i < ROWS; i++ {
@@ -67,7 +69,7 @@ func test_map_insertion_accuracy_rw(m map[point]point) {
                 key := point{idx, j}
                 val := point{ROWS - idx, COLS - j}
 				rwlock.RLock()
-                retval := m[key]
+                retval := rw_map[key]
 				rwlock.RUnlock()
                 if retval != val {
                     fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
@@ -87,7 +89,7 @@ func test_map_insertion_accuracy_rw(m map[point]point) {
     }
 }
 
-func test_map_deletion_accuracy_rw(m map[point]point) {
+func test_map_deletion_accuracy_rw() {
     passed := true
     c := make(chan int)
     for i := 0; i < ROWS; i++ {
@@ -96,7 +98,7 @@ func test_map_deletion_accuracy_rw(m map[point]point) {
                 key := point{idx, j}
                 val := point{0, 0}
 				rwlock.Lock()
-                retval := m[key]
+                retval := rw_map[key]
 			    rwlock.Unlock()
                 if retval != val {
                     fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
@@ -116,7 +118,8 @@ func test_map_deletion_accuracy_rw(m map[point]point) {
     }
 }
 
-func all_map_struct_rw(m map[point]point) {
+func all_map_struct_rw() {
+	rw_map = make(map[point]point)
 	iteration_modulo, retrieve_modulo, delete_modulo := 103, 5, 7
 
 	// We spawn ROWS Goroutines
@@ -132,20 +135,20 @@ func all_map_struct_rw(m map[point]point) {
 				start := time.Now()
 				if r % iteration_modulo == 0 {
 					rwlock.RLock()
-					for k, v := range m {
+					for k, v := range rw_map {
 						expected := point{ROWS - k.x, COLS - k.y}
 						if v != expected {
 							panic(fmt.Sprintf("[ReaderWriter Map] Expected %v for key %v, but received %v", expected, k, v))
 						}
 					}
+					rwlock.RUnlock()
 					timeIterating += time.Since(start)
 					iterations++
-					rwlock.RUnlock()
 				} else if r % retrieve_modulo == 0 {
 					rwlock.RLock()
 					key := point{idx, lastAdded}
 					expected := point{0, 0}
-					retval := m[key]
+					retval := rw_map[key]
 					// -1 means uninitialized...
 					if lastAdded != -1 {
 						expected = point{ROWS - idx, COLS - lastAdded}
@@ -153,27 +156,27 @@ func all_map_struct_rw(m map[point]point) {
 					if retval != expected {
 						panic(fmt.Sprintf("[ReaderWriter Map] Key: %v;Expected: %v;Found: %v\n", key, expected, retval))
 					}
+					rwlock.RUnlock()
 					timeRetrieving += time.Since(start)
 					retrieves++
-					rwlock.RUnlock()
 				} else if r % delete_modulo == 0 {
 					rwlock.Lock()
 					if lastAdded != -1 {
-						delete(m, point{ROWS - idx, COLS - lastAdded})
+						delete(rw_map, point{ROWS - idx, COLS - lastAdded})
 						deletes++
 					}
+					rwlock.Unlock()
 					timeDeleting += time.Since(start)
 					lastAdded = -1
-					rwlock.Unlock()
 				} else {
 					rwlock.Lock()
 					k := point{idx, j}
 					v := point{ROWS - idx, COLS - j}
-					m[k] = v
+					rw_map[k] = v
 					lastAdded = j
+					rwlock.Unlock()
 					timeAdding += time.Since(start)
 					adds++
-					rwlock.Unlock()
 				}
 			}
 			fmt.Printf("[ReaderWriter Map]\nInsertion { Time: %v; Operations: %v }\nRetrieve { Time: %v; Operations: %v }\nDelete { Time: %v; Operations: %v }\nIteration { Time: %v; Operations: %v }\n\n\n",
@@ -184,14 +187,13 @@ func all_map_struct_rw(m map[point]point) {
 }
 
 func TestRWLockMap() {
-	m := make(map[point]point)
 	c = make(chan int)
 	insertTime := make([]time.Duration, TESTS)
 	deleteTime := make([]time.Duration, TESTS)
 	retrieveTime := make([]time.Duration, TESTS * 2)
 	iterationTime := make([]time.Duration, TESTS)
 
-	all_map_struct_rw(m)
+	all_map_struct_rw()
     for i := 0; i < ROWS; i++ {
         <- c
     }
@@ -203,7 +205,7 @@ func TestRWLockMap() {
 	for iterations := 0; iterations < TESTS; iterations++ {
 		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Populating with %v elements...", iterations + 1, ROWS * COLS)
 		start := time.Now()
-		populate_map_rw_struct(m)
+		populate_map_rw_struct()
 		for i := 0; i < ROWS; i++ {
 			<- c
 		}
@@ -216,12 +218,12 @@ func TestRWLockMap() {
 
 		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Testing Insertion Accuracy...", iterations + 1)
 		start = time.Now()
-		test_map_insertion_accuracy_rw(m)
+		test_map_insertion_accuracy_rw()
 		end = time.Since(start)
 		retrieveTime[iterations * 2] = end
 
 		start = time.Now()
-		iterate_map_rw_struct(m)
+		iterate_map_rw_struct()
 		for i := 0; i < ROWS; i++ {
 			<- c
 		}
@@ -230,7 +232,7 @@ func TestRWLockMap() {
 
 		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Deleting all %v elements...", iterations + 1, ROWS * COLS)
 		start = time.Now()
-		delete_map_rw_struct(m)
+		delete_map_rw_struct()
 		for i := 0; i < ROWS; i++ {
 			<- c
 		}
@@ -239,7 +241,7 @@ func TestRWLockMap() {
 
 		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Testing Deletion Accuracy...", iterations + 1)
 		start = time.Now()
-		test_map_deletion_accuracy_rw(m)
+		test_map_deletion_accuracy_rw()
 		end = time.Since(start)
 		retrieveTime[(iterations * 2) + 1] = end
 	}

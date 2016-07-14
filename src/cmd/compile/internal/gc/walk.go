@@ -16,7 +16,12 @@ const (
 	tmpstringbufsize = 32
 )
 
-var shouldRelease bool = false
+// We should release immediately following statement
+const immediateRelease = 1 << 0
+// Release is handled in a sync.Interlocked statement
+const interlockedRelease = 1 << 1
+// State of whether or not we should append an automatic release
+var releaseFlags int = 0
 
 // L.J: Injected call to release the bucketHdr
 func concurrentMapRelease(init *Nodes) *Node {
@@ -292,7 +297,44 @@ func walkstmt(n *Node) *Node {
 	
 	case OINTERLOCKED:
 		n.Left = walkexpr(n.Left, &n.Ninit)
+		t := n.Left.Type
+		if !t.IsCMap() {
+			Yyerror("sync.Interlocked requires a concurrent map!Received Type %v and Value %v!", t, n.Left)
+		}
+		mapSym := n.Left.Sym
 		walkstmtlist(n.Nbody.Slice())
+		
+		var interlockedKeys []*Node
+		for _, nl := range n.Nbody.Slice() {
+			switch nl.Op {
+				case ODELETE:
+					map_ := n.List.First()
+					key := n.List.Second()
+					fmt.Printf("Maps: %v and %v\n", n.Left, map_)
+					// If they refer to the same map
+					if map_.Sym != mapSym {
+						fmt.Printf("Not Matched Map: %v and %v\n", n.Left, nl.Left)
+						continue
+					} 
+					
+					fmt.Printf("Matched Map: %v and %v\n", n.Left, nl.Left)
+					for i := 0; i < len(interlockedKeys); i++ {
+						if interlockedKeys[i].Sym == key.Sym {
+							fmt.Printf("Duplicate Key: %v and %v\n", n.Right, nl.Right)
+							break
+						}
+						
+						// If this is the last one
+						if (i - 1) == len(interlockedKeys) {
+							fmt.Printf("Unique Key: %v and %v\n", n.Right, nl.Right)
+							interlockedKeys = append(interlockedKeys, n.Right)
+							break
+						}
+					}
+			}
+		}
+
+		fmt.Printf("Keys: %v\n", interlockedKeys)
 
 	case OPROC:
 		switch n.Left.Op {
@@ -811,8 +853,8 @@ opswitch:
 			n = applywritebarrier(n)
 		}
 
-		if shouldRelease {
-			shouldRelease = false
+		if releaseFlags == immediateRelease {
+			releaseFlags = 0
 			rFn := concurrentMapRelease(init)
 			rFn.Ninit.Append(n)
 			rFn = walkexpr(rFn, init)
@@ -936,6 +978,17 @@ opswitch:
 		n = typecheck(n, Etop)
 		n = walkexpr(n, init)
 
+		if t.IsCMap() {
+			if releaseFlags == interlockedRelease {
+				
+			} else {
+				rFn := concurrentMapRelease(init)
+				rFn.Ninit.Append(n)
+				rFn = walkexpr(rFn, init)
+				n = rFn
+			}
+		}
+
 	case ODELETE:
 		init.AppendNodes(&n.Ninit)
 		map_ := n.List.First()
@@ -948,10 +1001,13 @@ opswitch:
 
 		t := map_.Type
 		n = mkcall1(mapfndel("mapdelete", t), nil, init, typename(t), map_, key)
-		rFn := concurrentMapRelease(init)
-		rFn.Ninit.Append(n)
-		rFn = walkexpr(rFn, init)
-		n = rFn
+		if t.IsCMap() && releaseFlags != interlockedRelease {
+			rFn := concurrentMapRelease(init)
+			rFn.Ninit.Append(n)
+			rFn = walkexpr(rFn, init)
+			n = rFn
+		}
+		
 
 	case OAS2DOTTYPE:
 		e := n.Rlist.First() // i.(T)
@@ -1282,7 +1338,9 @@ opswitch:
 		n = Nod(OIND, n, nil)
 		n.Type = t.Val()
 		n.Typecheck = 1
-		shouldRelease = true
+		if t.IsCMap() && releaseFlags != interlockedRelease {
+			releaseFlags = immediateRelease
+		}
 
 	case ORECV:
 		Fatalf("walkexpr ORECV") // should see inside OAS only
@@ -1445,6 +1503,7 @@ opswitch:
 
 		// L.J: Only change in code
 		if n.Right != nil && n.Right.Int64() != 0 {
+			t.MapType().isConcurrent = 1
 			debug = true
 		}
 
@@ -2230,10 +2289,12 @@ func convas(n *Node, init *Nodes) *Node {
 
 		val = Nod(OADDR, val, nil)
 		n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
-		rFn := concurrentMapRelease(init)
-		rFn.Ninit.Append(n)
-		rFn = walkexpr(rFn, init)
-		n = rFn
+		if map_.Type.IsCMap() && releaseFlags != interlockedRelease {
+			rFn := concurrentMapRelease(init)
+			rFn.Ninit.Append(n)
+			rFn = walkexpr(rFn, init)
+			n = rFn
+		}
 		goto out
 	}
 

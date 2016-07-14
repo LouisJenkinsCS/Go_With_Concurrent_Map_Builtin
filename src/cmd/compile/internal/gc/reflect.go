@@ -318,10 +318,9 @@ func bucketHdr(t *Type) *Type {
 		return t.MapType().BucketHdr
 	}
 
-	var field [3]*Field
+	var field [2]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
-	field[1] = makefield("readers", Types[TUINTPTR])
-	field[2] = makefield("bucket", Types[TUNSAFEPTR])
+	field[1] = makefield("bucket", Types[TUNSAFEPTR])
 
 	bhdr := typ(TSTRUCT)
 	bhdr.Noalg = true

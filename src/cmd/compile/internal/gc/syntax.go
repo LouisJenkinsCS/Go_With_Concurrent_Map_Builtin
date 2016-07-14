@@ -472,7 +472,6 @@ const (
 
 	// L.J: Concurrent Map critical section
 	OINTERLOCKED // runtime.Interlocked List { Body }
-	OINTERLOCKEDRANGE // for List = runtime.Interlocked range Right { Nbody }
 
 	OEND
 )

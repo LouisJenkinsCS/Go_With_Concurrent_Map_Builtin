@@ -376,59 +376,31 @@ func cmapiternext(it *hiter) {
                 goto next
             }
 
-            // If another iterator owns this lock, we can attempt to go through as a reader
-            if lock == ITERATOR {
-                readers := atomic.Loaduintptr(&hdr.readers)
-
-                // If the reader counter is 0, then the last reader has already exited; loop again, no backoff
-                if readers == 0 {
-                    continue
-                }
-                
-                
-                // Attempt to get in as a reader.
-                if atomic.Casuintptr(&hdr.readers, readers, readers + 1) {
-                    break
-                }
-                continue
-            }
-
-            // Even as an iterator, we must acquire lock to safely mark as ITERATOR
+            // Acquire lock on bucket
             if lock == UNLOCKED {
                 // Attempt to acquire
                 if atomic.Casuintptr(&hdr.lock, 0, gptr) {
-                    // As such we may mark the bucket as being owned by an ITERATOR and initialize reader count
-                    atomic.Storeuintptr(&hdr.readers, 1)
-                    atomic.Storeuintptr(&hdr.lock, ITERATOR)
+                    // If the bucket is nil, we can't iterate through it. Go to next one
+                    if hdr.bucket == nil {
+                        atomic.Storeuintptr(&hdr.lock, UNLOCKED)
+                        goto next
+                    }
                     break
                 }
             }
 
-            spins++
             if spins > BACKOFF_AFTER_SPINS {
                 timeSleep(backoff)
                 backoff *= 2
             }
+            spins++
         }
 
         // Atomic snapshot of the bucketData
         typedmemmove(t.bucketdata, unsafe.Pointer(&citer.data), hdr.bucket)
         
-        // Decrement our count as a reader
-        for {
-            newCount := atomic.Loaduintptr(&hdr.readers)
-            if newCount == 0 {
-                throw("Bad reader counter (attempted to decrement at 0)")
-            }
-            if atomic.Casuintptr(&hdr.readers, newCount, newCount - 1) {
-                // If we succeed, and newCount was 1, then we just decremented it to 0 and we are last ones out
-                if newCount == 1 {
-                    // It is our job to unmark this bucket.
-                    atomic.Storeuintptr(&hdr.lock, 0)
-                }
-                break;
-            }
-        }
+        // Release lock
+        atomic.Storeuintptr(&hdr.lock, UNLOCKED)
 
         goto findKeyValue
 }
@@ -505,6 +477,8 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
             }
             spins++
         }
+
+        g.releaseDepth++
         
         // If bucket is nil, then we allocate a new one.
         if hdr.bucket == nil {
@@ -600,36 +574,9 @@ func maprelease() {
         // println("g #", g.goid, ": released lock")
         hdr := (*bucketHdr)(g.releaseBucket)
 
-        // Atomically release lock
-        lock := atomic.Loaduintptr(&hdr.lock)
-
-        if lock == UNLOCKED || lock == RECURSIVE {
-            throw("Attempt to release a lock that has status of UNLOCKED or RECURSIVE!!!")
-        } else if lock == ITERATOR {
-            // Decrement our count as a reader
-            for {
-                newCount := atomic.Loaduintptr(&hdr.readers)
-                if newCount == 0 {
-                    throw("Bad reader counter (attempted to decrement at 0)")
-                }
-                if atomic.Casuintptr(&hdr.readers, newCount, newCount - 1) {
-                    // If we succeed, and newCount was 1, then we just decremented it to 0 and we are last ones out
-                    if newCount == 1 {
-                        // It is our job to unmark this bucket.
-                        atomic.Storeuintptr(&hdr.lock, 0)
-                    }
-                    break;
-                }
-            }
-        } else {
-            gptr := uintptr(unsafe.Pointer(g))
-            // We SHOULD own the lock, but a quick check to ensure validity
-            if lock != gptr {
-                throw("Somehow attempting to unlock a lock that doesn't belong to us!")
-            }
-            
-            // Otherwise, just unlock it as normal
-            atomic.Storeuintptr(&hdr.lock, 0)
+        g.releaseDepth--
+        if g.releaseDepth == 0 {
+            atomic.Storeuintptr(&hdr.lock, UNLOCKED)
         }
 
         g.releaseBucket = nil
@@ -730,23 +677,6 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
                 break
             }
 
-            // If the lock is held by an iterator, we can attempt to go through as a reader
-            if lock == ITERATOR {
-                readers := atomic.Loaduintptr(&hdr.readers)
-                
-                // If the reader counter is 0, then the last reader has already exited; loop again, no backoff
-                if readers == 0 {
-                    continue
-                }
-                
-                // Attempt to get in as a reader.
-                if atomic.Casuintptr(&hdr.readers, readers, readers + 1) {
-                    g.releaseBucket = unsafe.Pointer(hdr)
-                    break
-                }
-                continue
-            }
-
             // If the lock is uncontested
             if lock == UNLOCKED  {
                 // Attempt to acquire
@@ -762,6 +692,8 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
             }
             spins++
         }
+
+        g.releaseDepth++
 
         // If the bucket is nil, then it is empty, stop here
         if hdr.bucket == nil {

@@ -174,6 +174,7 @@ type MapType struct {
 	BucketHdr *Type // internal struct type representing a concurrent map bucketHdr (optional)
 	BucketData *Type // internal struct type representing a concurrnet map bucketData (optional)
 	ConcurrentIterator *Type // internal struct type representing a concurrent map iterator (optional)
+	isConcurrent uintptr // Whether or not it is a concurrent map; Pointer aligned
 }
 
 // MapType returns t's extra map-specific fields.
@@ -1135,6 +1136,11 @@ func (t *Type) IsString() bool {
 
 func (t *Type) IsMap() bool {
 	return t.Etype == TMAP
+}
+
+func (t *Type) IsCMap() bool {
+	m := t.MapType()
+	return m.isConcurrent != 0
 }
 
 func (t *Type) IsChan() bool {
