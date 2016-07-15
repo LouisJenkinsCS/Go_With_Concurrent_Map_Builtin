@@ -23,6 +23,11 @@ const interlockedRelease = 1 << 1
 // State of whether or not we should append an automatic release
 var releaseFlags int = 0
 
+// Maps temporaries to their actual value
+var interlockedKeys, keyMap map[string]*Node
+// Map Sym we are looking for in the current context
+var interlockedMap *Sym
+
 // L.J: Injected call to release the bucketHdr
 func concurrentMapRelease(init *Nodes) *Node {
 	fn := syslook("maprelease")
@@ -301,40 +306,79 @@ func walkstmt(n *Node) *Node {
 		if !t.IsCMap() {
 			Yyerror("sync.Interlocked requires a concurrent map!Received Type %v and Value %v!", t, n.Left)
 		}
-		mapSym := n.Left.Sym
-		walkstmtlist(n.Nbody.Slice())
 		
-		var interlockedKeys []*Node
-		for _, nl := range n.Nbody.Slice() {
-			switch nl.Op {
-				case ODELETE:
-					map_ := n.List.First()
-					key := n.List.Second()
-					fmt.Printf("Maps: %v and %v\n", n.Left, map_)
-					// If they refer to the same map
-					if map_.Sym != mapSym {
-						fmt.Printf("Not Matched Map: %v and %v\n", n.Left, nl.Left)
-						continue
-					} 
+		interlockedMap = n.Left.Sym
+		releaseFlags = interlockedRelease
+		// Maps the string representing the node to the actual node itself
+		keyMap = make(map[string]*Node)
+		// All of the interlocked keys that need to be acquired ahead of time are kept in a map as it acts as a set.
+		interlockedKeys = make(map[string]*Node)
+
+		// for _, nn := range n.Nbody.Slice() {
+		// 	switch nn.Op {
+		// 		case ODELETE:
+		// 			map_ := nn.List.First()
+		// 			key := nn.List.Second()
+
+		// 			if map_.Sym == mapSym {
+		// 				fmt.Printf("Matched Map: %v\n", map_)
+		// 				// delete(m, autotmp_*); We need to keep track of the key
+		// 				interlockedKeys[fmt.Sprintf("%v", key)] = nil
+		// 			}
+		// 			fmt.Printf("Delete Node: {map: %v, key: %v}\n", nn.List.First(), nn.List.Second())
+
+		// 		case OAS:
+		// 			left := nn.Left
+		// 			if left.Op == OINDEXMAP {
+		// 				if left.Left.Sym == mapSym {
+		// 					fmt.Printf("Matched Map: %v\n", left.Left)
+		// 					// m[autotmp_*]; We need to keep track of the key
+		// 					interlockedKeys[fmt.Sprintf("%v", left.Right)] = nil
+		// 				}
+		// 				fmt.Printf("Index Map Node: {left: {Val: %v, Type: %v}, right: {Val: %v, Type: %v}}\n",
+		// 					left.Left, left.Left.Type.Etype, left.Right, left.Right.Type.Etype)
+		// 			}
+		// 			right := nn.Right
+		// 			if right.Op == OINDEXMAP {
+		// 				if right.Left.Sym == mapSym {
+		// 					fmt.Printf("Matched Map: %v\n", right.Left)
+		// 					// m[autotmp_*]; We need to keep track of the key
+		// 					interlockedKeys[fmt.Sprintf("%v", right.Right)] = nil
+		// 				}
+		// 				fmt.Printf("Index Map Node: {left: {Val: %v, Type: %v}, right: {Val: %v, Type: %v}}\n",
+		// 					right.Left, right.Left.Type.Etype, right.Right, right.Right.Type.Etype)
+		// 			}
+		// 			fmt.Printf("Assignment Node: {left: {Val: %v, Type: %v}, right: {Val:  %v, Type: %v}}\n",
+		// 				left, left.Type.Etype,  right, right.Type.Etype)
 					
-					fmt.Printf("Matched Map: %v and %v\n", n.Left, nl.Left)
-					for i := 0; i < len(interlockedKeys); i++ {
-						if interlockedKeys[i].Sym == key.Sym {
-							fmt.Printf("Duplicate Key: %v and %v\n", n.Right, nl.Right)
-							break
-						}
-						
-						// If this is the last one
-						if (i - 1) == len(interlockedKeys) {
-							fmt.Printf("Unique Key: %v and %v\n", n.Right, nl.Right)
-							interlockedKeys = append(interlockedKeys, n.Right)
-							break
-						}
-					}
-			}
+		// 			// autotmp_* = key; Since all keys are first pushed into temporary stack-allocated variables to ensure they are
+		// 			// addressable, and then pops them at the end of their usage, we need to replicate this process ourselves. The right
+		// 			// node holds the value we so seek. Keep track of it.
+		// 			if istemp(left) {
+		// 				keyMap[fmt.Sprintf("%v", left)] = right
+		// 			}
+					
+		// 		default:
+		// 			if nn.Op == OVARKILL {
+		// 				continue
+		// 			}
+		// 			fmt.Printf("Other Node: {Op: %v, Token: %v}\n", nn.Op, nn)
+		// 	}
+		// }
+		
+		for _, nn := range n.Nbody.Slice() {
+			fmt.Printf("Node: %v\n", nn)
 		}
 
-		fmt.Printf("Keys: %v\n", interlockedKeys)
+		walkstmtlist(n.Nbody.Slice())
+
+		for key := range interlockedKeys {
+			fmt.Printf("Found Key: {Variable: %v, Value: %v}\n", key, keyMap[key])
+		}
+		interlockedKeys = nil
+		interlockedMap = nil
+		releaseFlags = 0
+		
 
 	case OPROC:
 		switch n.Left.Op {
@@ -777,6 +821,15 @@ opswitch:
 		n.Left = walkexpr(n.Left, init)
 		n.Left = safeexpr(n.Left, init)
 
+		// If we are in the scope of a sync.Interlocked block
+		if releaseFlags == interlockedRelease {
+			// We are looking for things like autotmp_* = key. Have to keep track of everything
+			if istemp(n.Left) && n.Right != nil && !iszero(n.Right) {
+				keyMap[fmt.Sprintf("%v", n.Left)] = n.Right
+				fmt.Printf("Mapped %v to %v\n", n.Left, n.Right)
+			}
+		}
+
 		if oaslit(n, init) {
 			break
 		}
@@ -995,6 +1048,12 @@ opswitch:
 		key := n.List.Second()
 		map_ = walkexpr(map_, init)
 		key = walkexpr(key, init)
+
+		if releaseFlags == interlockedRelease {
+			if map_.Sym == interlockedMap {
+				interlockedKeys[fmt.Sprintf("%v", key)] = nil
+			}
+		}
 
 		// orderstmt made sure key is addressable.
 		key = Nod(OADDR, key, nil)
@@ -1302,6 +1361,15 @@ opswitch:
 
 		n.Left = walkexpr(n.Left, init)
 		n.Right = walkexpr(n.Right, init)
+
+		// If we are in the scope of a sync.Interlocked block
+		if releaseFlags == interlockedRelease {
+			// If this is the map we are interlocking the keys for
+			if n.Left.Sym == interlockedMap {
+				fmt.Printf("Matched Map: %v\n", n.Left)
+				interlockedKeys[fmt.Sprintf("%v", n.Right)] = nil
+			}
+		}
 
 		t := n.Left.Type
 		p := ""
@@ -2283,6 +2351,12 @@ func convas(n *Node, init *Nodes) *Node {
 		map_ = walkexpr(map_, init)
 		key = walkexpr(key, init)
 		val = walkexpr(val, init)
+
+		if releaseFlags == interlockedRelease {
+			if map_.Sym == interlockedMap {
+				interlockedKeys[fmt.Sprintf("%v", key)] = nil
+			}
+		}
 
 		// orderexpr made sure key and val are addressable.
 		key = Nod(OADDR, key, nil)
