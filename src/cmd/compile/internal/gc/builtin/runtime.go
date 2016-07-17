@@ -101,6 +101,7 @@ func mapdelete(mapType *byte, hmap map[any]any, key *any)
 func mapiternext(hiter *any)
 // L.J: Concurrent map release
 func maprelease()
+func mapacquire(mapType *byte, hmap map[any]any, keys ...*any)
 
 // *byte is really *runtime.Type
 func makechan(chanType *byte, hint int64) (hchan chan any)

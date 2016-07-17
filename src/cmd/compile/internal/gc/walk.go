@@ -366,18 +366,48 @@ func walkstmt(n *Node) *Node {
 		// 	}
 		// }
 		
-		for _, nn := range n.Nbody.Slice() {
-			fmt.Printf("Node: %v\n", nn)
-		}
+		// for _, nn := range n.Nbody.Slice() {
+		// 	fmt.Printf("Node: %v\n", nn)
+		// }
 
 		walkstmtlist(n.Nbody.Slice())
 
+		releaseFlags = 0
+		var newBody, addrKeys []*Node
 		for key := range interlockedKeys {
+			// Obtain the mapped Node from the keyMap (the value the 'autotmp_*' variable gets assigned to)
+			keyNode := keyMap[key]
+			keyNode = walkexpr(keyNode, &n.Ninit)
 			fmt.Printf("Found Key: {Variable: %v, Value: %v}\n", key, keyMap[key])
+
+			keyTmp := temp(keyNode.Type)
+			keyOAS := Nod(OAS, keyTmp, keyNode)
+			keyOAS = typecheck(keyOAS, Etop)
+			keyAddr := Nod(OADDR, keyTmp, nil)
+			keyAddr.Ninit.Append(keyOAS)
+			keyAddr = typecheck(keyAddr, Erv)
+
+			addrKeys = append(addrKeys, keyAddr)
+			fmt.Printf("Types: {keyNode: {Val: %v, Type: %v}, keyAddr: {Val: %v, Type: %v}, keyTmp: {Val: %v, Type: %v}}\n", 
+				keyNode, keyNode.Type, keyAddr, keyAddr.Type, keyTmp, keyTmp.Type)
 		}
+
+		fmt.Printf("addrKeys len: %v\n", len(addrKeys))
+		fn := syslook("mapacquire")
+		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key())
+		args := []*Node{typename(t), n.Left}
+		args = append(args, addrKeys...)
+		fmt.Printf("args len: %v\n", len(args))
+		acquire := mkcall1(fn, nil, &n.Ninit, args...)
+		acquire.List.Set(args)
+		newBody = append(newBody, acquire)
+		newBody = append(newBody, n.Nbody.Slice()...)
+		n.Nbody.Set(newBody)
+		walkstmtlist(n.Nbody.Slice())
+
 		interlockedKeys = nil
 		interlockedMap = nil
-		releaseFlags = 0
+		
 		
 
 	case OPROC:
@@ -826,7 +856,7 @@ opswitch:
 			// We are looking for things like autotmp_* = key. Have to keep track of everything
 			if istemp(n.Left) && n.Right != nil && !iszero(n.Right) {
 				keyMap[fmt.Sprintf("%v", n.Left)] = n.Right
-				fmt.Printf("Mapped %v to %v\n", n.Left, n.Right)
+				// fmt.Printf("Mapped %v to %v\n", n.Left, n.Right)
 			}
 		}
 
@@ -1366,7 +1396,7 @@ opswitch:
 		if releaseFlags == interlockedRelease {
 			// If this is the map we are interlocking the keys for
 			if n.Left.Sym == interlockedMap {
-				fmt.Printf("Matched Map: %v\n", n.Left)
+				// fmt.Printf("Matched Map: %v\n", n.Left)
 				interlockedKeys[fmt.Sprintf("%v", n.Right)] = nil
 			}
 		}
