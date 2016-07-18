@@ -1139,6 +1139,9 @@ func (t *Type) IsMap() bool {
 }
 
 func (t *Type) IsCMap() bool {
+	if t.Etype != TMAP {
+		return false
+	}
 	m := t.MapType()
 	return m.isConcurrent != 0
 }

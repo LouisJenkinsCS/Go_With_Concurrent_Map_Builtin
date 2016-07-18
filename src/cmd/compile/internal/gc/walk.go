@@ -300,44 +300,40 @@ func walkstmt(n *Node) *Node {
 	
 	case OINTERLOCKED:
 		n.Left = walkexpr(n.Left, &n.Ninit)
-		n.Right = walkexpr(n.Right, &n.Ninit)
 		walkexprlist(n.List.Slice(), &n.Ninit)
 
-		t := n.List.First().Type
+		map_ := n.List.First()
+		key := n.List.Second()
+		obj := n.Left
+		map_ = walkexpr(map_, &n.Ninit)
+		key = walkexpr(key, &n.Ninit)
+		obj = walkexpr(obj, &n.Ninit)
+		t := map_.Type
 
-		fmt.Printf("Type: %v; Map: %v; Obj: %v; Key: %v; Expr: %v", t, n.List.First(), n.Left, n.List.Second, n.Right)
 		if !t.IsCMap() {
-			Yyerror("sync.Interlocked requires a concurrent map!Received Type %v and Value %v!", t, n.Left)
+			Yyerror("sync.Interlocked requires a concurrent map!Received Type %v and Value %v!", t, map_)
 		}
 		
-		interlockedMap = n.Right.Left.Sym
+		interlockedMap = map_.Sym
 		releaseFlags = interlockedRelease
-
-		walkstmtlist(n.Nbody.Slice())
 
 		releaseFlags = 0
 		var newBody []*Node
-		// keyBuf := temp(t.MapType().Key)
-		// key := walkexpr(n.Right.List().Slice()[2], &n.Ninit)
-		// key = typecheck(key, Erv)
-		// keyOAS := Nod(OAS, keyBuf, key)
-		// keyAddr := Nod(OADDR, keyBuf, nil)
-		// keyAddr.Ninit.Append(keyOAS)
-		// keyAddr = typecheck(keyAddr, Erv)
+		tmpKey := temp(t.MapType().Key)
+		tmpAddr := Nod(OADDR, tmpKey, nil)
+		tmpAddr.Ninit.Append(typecheck(Nod(OAS, tmpKey, key), Etop))
+		tmpAddr = typecheck(tmpAddr, Erv)
 
 		fn := syslook("mapacquire")
-		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key())
-		args := []*Node{typename(t), n.List.First()}
-		args = append(args, n.Right.Left.List.Slice()[2])
-		acquire := mkcall1(fn, nil, &n.Ninit, args...)
-		acquire.List.Set(args)
-		newBody = append(newBody, acquire)
-		newBody = append(newBody, Nod(OAS, n.Left, n.Right))
+		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key(), t.Val())
+		fn = mkcall1(fn, Ptrto(t.MapType().Val), &n.Ninit, typename(t), map_, tmpAddr)
+		oasNod := typecheck(Nod(OAS, obj, typecheck(Nod(OIND, fn, nil), Erv)), Etop)
+		oasNod.Colas = true
+		n.Ninit.Append(oasNod)
 		newBody = append(newBody, n.Nbody.Slice()...)
 		n.Nbody.Set(newBody)
 		walkstmtlist(n.Nbody.Slice())
-		
-		
+
 
 	case OPROC:
 		switch n.Left.Op {

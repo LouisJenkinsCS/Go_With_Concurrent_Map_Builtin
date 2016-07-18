@@ -994,9 +994,9 @@ func (p *parser) interlocked_stmt() *Node {
 	p.want(LINTERLOCKED)
 	markdcl()
 
-	lno := lineno
-	obj := p.new_name(p.sym())
-
+	obj := p.expr()
+	obj = newname(obj.Sym)
+	declare(obj, dclcontext)
 	p.want(LCOLAS)
 	map_ := p.name()
 	p.want('[')

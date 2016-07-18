@@ -743,11 +743,10 @@ func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
     return retval
 }
 
-func mapacquire(t *maptype, h *hmap, keys ...unsafe.Pointer) {
-    println("Acquired # of Keys:", len(keys))
-    for _, k := range keys {
-        println("Val: ", *(*int)(k))
-    }
+func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
+    println("Val: ", *(*int)(key))
+
+    return cmapaccess1(t, h, key)
 }
 
 func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
