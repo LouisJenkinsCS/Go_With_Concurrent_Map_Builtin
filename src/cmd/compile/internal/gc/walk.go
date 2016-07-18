@@ -304,10 +304,8 @@ func walkstmt(n *Node) *Node {
 
 		map_ := n.List.First()
 		key := n.List.Second()
-		obj := n.Left
 		map_ = walkexpr(map_, &n.Ninit)
 		key = walkexpr(key, &n.Ninit)
-		obj = walkexpr(obj, &n.Ninit)
 		t := map_.Type
 
 		if !t.IsCMap() {
@@ -317,7 +315,6 @@ func walkstmt(n *Node) *Node {
 		interlockedMap = map_.Sym
 		releaseFlags = interlockedRelease
 
-		releaseFlags = 0
 		var newBody []*Node
 		tmpKey := temp(t.MapType().Key)
 		tmpAddr := Nod(OADDR, tmpKey, nil)
@@ -326,14 +323,13 @@ func walkstmt(n *Node) *Node {
 
 		fn := syslook("mapacquire")
 		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key(), t.Val())
-		fn = mkcall1(fn, Ptrto(t.MapType().Val), &n.Ninit, typename(t), map_, tmpAddr)
-		oasNod := typecheck(Nod(OAS, obj, typecheck(Nod(OIND, fn, nil), Erv)), Etop)
-		oasNod.Colas = true
-		n.Ninit.Append(oasNod)
+		fn = mkcall1(fn, nil, &n.Ninit, typename(t), map_, tmpAddr)
 		newBody = append(newBody, n.Nbody.Slice()...)
+		newBody = append(newBody, mkcall1(syslook("maprelease"), nil, &n.Ninit))
 		n.Nbody.Set(newBody)
 		walkstmtlist(n.Nbody.Slice())
 
+		releaseFlags = 0
 
 	case OPROC:
 		switch n.Left.Op {

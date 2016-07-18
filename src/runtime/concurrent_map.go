@@ -477,8 +477,6 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
             }
             spins++
         }
-
-        g.releaseDepth++
         
         // If bucket is nil, then we allocate a new one.
         if hdr.bucket == nil {
@@ -574,10 +572,7 @@ func maprelease() {
         // println("g #", g.goid, ": released lock")
         hdr := (*bucketHdr)(g.releaseBucket)
 
-        g.releaseDepth--
-        if g.releaseDepth == 0 {
-            atomic.Storeuintptr(&hdr.lock, UNLOCKED)
-        }
+        atomic.Storeuintptr(&hdr.lock, UNLOCKED)
 
         g.releaseBucket = nil
     }
@@ -692,8 +687,6 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
             }
             spins++
         }
-
-        g.releaseDepth++
 
         // If the bucket is nil, then it is empty, stop here
         if hdr.bucket == nil {

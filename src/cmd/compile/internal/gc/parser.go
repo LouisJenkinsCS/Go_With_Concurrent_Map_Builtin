@@ -994,17 +994,13 @@ func (p *parser) interlocked_stmt() *Node {
 	p.want(LINTERLOCKED)
 	markdcl()
 
-	obj := p.expr()
-	obj = newname(obj.Sym)
-	declare(obj, dclcontext)
-	p.want(LCOLAS)
 	map_ := p.name()
 	p.want('[')
 	key := p.expr()
 	p.want(']')
 	
 	// Interlocked node, takes argument in Right, and the body inside it's Nbody
-	stmt := Nod(OINTERLOCKED, obj, nil)
+	stmt := Nod(OINTERLOCKED, nil, nil)
 	stmt.List.Append(map_, key)
 
 	// Obtain the body

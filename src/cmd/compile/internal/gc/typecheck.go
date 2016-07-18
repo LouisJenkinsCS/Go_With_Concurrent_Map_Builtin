@@ -2044,15 +2044,20 @@ OpSwitch:
 	case OINTERLOCKED:
 		ok |= Etop
 		t := n.List.First().Type
-		if t == nil || !t.IsMap() {
-			Yyerror("sync.Interlocked requires an assignment from an rvalue map!")
+		if t != nil {
+			n.Left.Type = t.MapType().Val
+			if t.IsMap()  {
+				Yyerror("sync.Interlocked requires an assignment from an rvalue map!Received %v of type %v", n.List.First(), t)
+			}
 		}
-		n.Left.Type = t.MapType().Val
+
 		typecheckslice(n.Ninit.Slice(), Etop)
 		n.Left = typecheck(n.Left, Erv)
-		n.List.Second().Type = t.MapType().Key
+		if t != nil {
+			n.List.Second().Type = t.MapType().Key
+			n.List.Second().Typecheck = 1
+		}
 		typecheckslice(n.List.Slice(), Erv)
-		n.List.Second().Typecheck = 1
 		typecheckslice(n.Nbody.Slice(), Etop)
 
 	case ORETURN:
