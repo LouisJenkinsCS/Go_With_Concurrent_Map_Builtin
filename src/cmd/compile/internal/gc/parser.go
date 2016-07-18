@@ -993,13 +993,20 @@ func (p *parser) for_stmt() *Node {
 func (p *parser) interlocked_stmt() *Node {
 	p.want(LINTERLOCKED)
 	markdcl()
-	if p.tok != LNAME {
-		Yyerror("sync.Interlocked [MAP_SYMBOL] { ... }")
-	}
+
+	lno := lineno
+	obj := p.new_name(p.sym())
+
+	p.want(LCOLAS)
+	map_ := p.name()
+	p.want('[')
+	key := p.expr()
+	p.want(']')
 	
 	// Interlocked node, takes argument in Right, and the body inside it's Nbody
-	stmt := Nod(OINTERLOCKED, p.name(), nil)
-	
+	stmt := Nod(OINTERLOCKED, obj, nil)
+	stmt.List.Append(map_, key)
+
 	// Obtain the body
 	p.want('{')
 	body := p.stmt_list()

@@ -23,8 +23,6 @@ const interlockedRelease = 1 << 1
 // State of whether or not we should append an automatic release
 var releaseFlags int = 0
 
-// Maps temporaries to their actual value
-var interlockedKeys, keyMap map[string]*Node
 // Map Sym we are looking for in the current context
 var interlockedMap *Sym
 
@@ -302,111 +300,42 @@ func walkstmt(n *Node) *Node {
 	
 	case OINTERLOCKED:
 		n.Left = walkexpr(n.Left, &n.Ninit)
-		t := n.Left.Type
+		n.Right = walkexpr(n.Right, &n.Ninit)
+		walkexprlist(n.List.Slice(), &n.Ninit)
+
+		t := n.List.First().Type
+
+		fmt.Printf("Type: %v; Map: %v; Obj: %v; Key: %v; Expr: %v", t, n.List.First(), n.Left, n.List.Second, n.Right)
 		if !t.IsCMap() {
 			Yyerror("sync.Interlocked requires a concurrent map!Received Type %v and Value %v!", t, n.Left)
 		}
 		
-		interlockedMap = n.Left.Sym
+		interlockedMap = n.Right.Left.Sym
 		releaseFlags = interlockedRelease
-		// Maps the string representing the node to the actual node itself
-		keyMap = make(map[string]*Node)
-		// All of the interlocked keys that need to be acquired ahead of time are kept in a map as it acts as a set.
-		interlockedKeys = make(map[string]*Node)
-
-		// for _, nn := range n.Nbody.Slice() {
-		// 	switch nn.Op {
-		// 		case ODELETE:
-		// 			map_ := nn.List.First()
-		// 			key := nn.List.Second()
-
-		// 			if map_.Sym == mapSym {
-		// 				fmt.Printf("Matched Map: %v\n", map_)
-		// 				// delete(m, autotmp_*); We need to keep track of the key
-		// 				interlockedKeys[fmt.Sprintf("%v", key)] = nil
-		// 			}
-		// 			fmt.Printf("Delete Node: {map: %v, key: %v}\n", nn.List.First(), nn.List.Second())
-
-		// 		case OAS:
-		// 			left := nn.Left
-		// 			if left.Op == OINDEXMAP {
-		// 				if left.Left.Sym == mapSym {
-		// 					fmt.Printf("Matched Map: %v\n", left.Left)
-		// 					// m[autotmp_*]; We need to keep track of the key
-		// 					interlockedKeys[fmt.Sprintf("%v", left.Right)] = nil
-		// 				}
-		// 				fmt.Printf("Index Map Node: {left: {Val: %v, Type: %v}, right: {Val: %v, Type: %v}}\n",
-		// 					left.Left, left.Left.Type.Etype, left.Right, left.Right.Type.Etype)
-		// 			}
-		// 			right := nn.Right
-		// 			if right.Op == OINDEXMAP {
-		// 				if right.Left.Sym == mapSym {
-		// 					fmt.Printf("Matched Map: %v\n", right.Left)
-		// 					// m[autotmp_*]; We need to keep track of the key
-		// 					interlockedKeys[fmt.Sprintf("%v", right.Right)] = nil
-		// 				}
-		// 				fmt.Printf("Index Map Node: {left: {Val: %v, Type: %v}, right: {Val: %v, Type: %v}}\n",
-		// 					right.Left, right.Left.Type.Etype, right.Right, right.Right.Type.Etype)
-		// 			}
-		// 			fmt.Printf("Assignment Node: {left: {Val: %v, Type: %v}, right: {Val:  %v, Type: %v}}\n",
-		// 				left, left.Type.Etype,  right, right.Type.Etype)
-					
-		// 			// autotmp_* = key; Since all keys are first pushed into temporary stack-allocated variables to ensure they are
-		// 			// addressable, and then pops them at the end of their usage, we need to replicate this process ourselves. The right
-		// 			// node holds the value we so seek. Keep track of it.
-		// 			if istemp(left) {
-		// 				keyMap[fmt.Sprintf("%v", left)] = right
-		// 			}
-					
-		// 		default:
-		// 			if nn.Op == OVARKILL {
-		// 				continue
-		// 			}
-		// 			fmt.Printf("Other Node: {Op: %v, Token: %v}\n", nn.Op, nn)
-		// 	}
-		// }
-		
-		// for _, nn := range n.Nbody.Slice() {
-		// 	fmt.Printf("Node: %v\n", nn)
-		// }
 
 		walkstmtlist(n.Nbody.Slice())
 
 		releaseFlags = 0
-		var newBody, addrKeys []*Node
-		for key := range interlockedKeys {
-			// Obtain the mapped Node from the keyMap (the value the 'autotmp_*' variable gets assigned to)
-			keyNode := keyMap[key]
-			keyNode = walkexpr(keyNode, &n.Ninit)
-			fmt.Printf("Found Key: {Variable: %v, Value: %v}\n", key, keyMap[key])
+		var newBody []*Node
+		// keyBuf := temp(t.MapType().Key)
+		// key := walkexpr(n.Right.List().Slice()[2], &n.Ninit)
+		// key = typecheck(key, Erv)
+		// keyOAS := Nod(OAS, keyBuf, key)
+		// keyAddr := Nod(OADDR, keyBuf, nil)
+		// keyAddr.Ninit.Append(keyOAS)
+		// keyAddr = typecheck(keyAddr, Erv)
 
-			keyTmp := temp(keyNode.Type)
-			keyOAS := Nod(OAS, keyTmp, keyNode)
-			keyOAS = typecheck(keyOAS, Etop)
-			keyAddr := Nod(OADDR, keyTmp, nil)
-			keyAddr.Ninit.Append(keyOAS)
-			keyAddr = typecheck(keyAddr, Erv)
-
-			addrKeys = append(addrKeys, keyAddr)
-			fmt.Printf("Types: {keyNode: {Val: %v, Type: %v}, keyAddr: {Val: %v, Type: %v}, keyTmp: {Val: %v, Type: %v}}\n", 
-				keyNode, keyNode.Type, keyAddr, keyAddr.Type, keyTmp, keyTmp.Type)
-		}
-
-		fmt.Printf("addrKeys len: %v\n", len(addrKeys))
 		fn := syslook("mapacquire")
 		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key())
-		args := []*Node{typename(t), n.Left}
-		args = append(args, addrKeys...)
-		fmt.Printf("args len: %v\n", len(args))
+		args := []*Node{typename(t), n.List.First()}
+		args = append(args, n.Right.Left.List.Slice()[2])
 		acquire := mkcall1(fn, nil, &n.Ninit, args...)
 		acquire.List.Set(args)
 		newBody = append(newBody, acquire)
+		newBody = append(newBody, Nod(OAS, n.Left, n.Right))
 		newBody = append(newBody, n.Nbody.Slice()...)
 		n.Nbody.Set(newBody)
 		walkstmtlist(n.Nbody.Slice())
-
-		interlockedKeys = nil
-		interlockedMap = nil
 		
 		
 
@@ -855,7 +784,7 @@ opswitch:
 		if releaseFlags == interlockedRelease {
 			// We are looking for things like autotmp_* = key. Have to keep track of everything
 			if istemp(n.Left) && n.Right != nil && !iszero(n.Right) {
-				keyMap[fmt.Sprintf("%v", n.Left)] = n.Right
+				// TODO: Anything
 				// fmt.Printf("Mapped %v to %v\n", n.Left, n.Right)
 			}
 		}
@@ -1081,7 +1010,8 @@ opswitch:
 
 		if releaseFlags == interlockedRelease {
 			if map_.Sym == interlockedMap {
-				interlockedKeys[fmt.Sprintf("%v", key)] = nil
+				// TODO: Anything
+
 			}
 		}
 
@@ -1397,7 +1327,7 @@ opswitch:
 			// If this is the map we are interlocking the keys for
 			if n.Left.Sym == interlockedMap {
 				// fmt.Printf("Matched Map: %v\n", n.Left)
-				interlockedKeys[fmt.Sprintf("%v", n.Right)] = nil
+				// TODO: Anything
 			}
 		}
 
@@ -2384,7 +2314,7 @@ func convas(n *Node, init *Nodes) *Node {
 
 		if releaseFlags == interlockedRelease {
 			if map_.Sym == interlockedMap {
-				interlockedKeys[fmt.Sprintf("%v", key)] = nil
+				// TODO: Anything
 			}
 		}
 
