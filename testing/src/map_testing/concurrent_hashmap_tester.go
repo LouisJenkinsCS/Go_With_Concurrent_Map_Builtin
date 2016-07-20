@@ -41,7 +41,7 @@ func iterate_map_struct(m map[point]point) {
 				}
 				// j++
 			}
-			// fmt.Printf("%v correct...", j)
+			// // fmt.Printf("%v correct...", j)
 			c <- 0
 		}()
 	}
@@ -67,7 +67,7 @@ func all_map_struct(m map[point]point) {
 						if v != expected {
 							panic(fmt.Sprintf("[Concurrent Map] Expected %v for key %v, but received %v", expected, k, v))
 						}
-						nopFunction(k, v, 1)
+						// nopFunction(k, v, 1)
 					}
 					timeIterating += time.Since(start)
 					iterations++

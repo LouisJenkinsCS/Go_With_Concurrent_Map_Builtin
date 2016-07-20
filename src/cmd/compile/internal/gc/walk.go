@@ -307,10 +307,6 @@ func walkstmt(n *Node) *Node {
 		map_ = walkexpr(map_, &n.Ninit)
 		key = walkexpr(key, &n.Ninit)
 		t := map_.Type
-
-		if !t.IsCMap() {
-			Yyerror("sync.Interlocked requires a concurrent map!Received Type %v and Value %v!", t, map_)
-		}
 		
 		interlockedMap = map_.Sym
 		releaseFlags = interlockedRelease
@@ -982,15 +978,11 @@ opswitch:
 		n = typecheck(n, Etop)
 		n = walkexpr(n, init)
 
-		if t.IsCMap() {
-			if releaseFlags == interlockedRelease {
-				
-			} else {
-				rFn := concurrentMapRelease(init)
-				rFn.Ninit.Append(n)
-				rFn = walkexpr(rFn, init)
-				n = rFn
-			}
+		if releaseFlags != interlockedRelease {
+			rFn := concurrentMapRelease(init)
+			rFn.Ninit.Append(n)
+			rFn = walkexpr(rFn, init)
+			n = rFn
 		}
 
 	case ODELETE:
@@ -1012,7 +1004,7 @@ opswitch:
 
 		t := map_.Type
 		n = mkcall1(mapfndel("mapdelete", t), nil, init, typename(t), map_, key)
-		if t.IsCMap() && releaseFlags != interlockedRelease {
+		if releaseFlags != interlockedRelease {
 			rFn := concurrentMapRelease(init)
 			rFn.Ninit.Append(n)
 			rFn = walkexpr(rFn, init)
@@ -1358,7 +1350,7 @@ opswitch:
 		n = Nod(OIND, n, nil)
 		n.Type = t.Val()
 		n.Typecheck = 1
-		if t.IsCMap() && releaseFlags != interlockedRelease {
+		if releaseFlags != interlockedRelease {
 			releaseFlags = immediateRelease
 		}
 
@@ -2304,18 +2296,12 @@ func convas(n *Node, init *Nodes) *Node {
 		key = walkexpr(key, init)
 		val = walkexpr(val, init)
 
-		if releaseFlags == interlockedRelease {
-			if map_.Sym == interlockedMap {
-				// TODO: Anything
-			}
-		}
-
 		// orderexpr made sure key and val are addressable.
 		key = Nod(OADDR, key, nil)
 
 		val = Nod(OADDR, val, nil)
 		n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
-		if map_.Type.IsCMap() && releaseFlags != interlockedRelease {
+		if releaseFlags != interlockedRelease {
 			rFn := concurrentMapRelease(init)
 			rFn.Ninit.Append(n)
 			rFn = walkexpr(rFn, init)

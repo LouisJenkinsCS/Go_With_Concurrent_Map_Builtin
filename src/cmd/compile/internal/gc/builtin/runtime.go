@@ -102,6 +102,11 @@ func mapiternext(hiter *any)
 // L.J: Concurrent map release
 func maprelease()
 func mapacquire(mapType *byte, hmap map[any]any, key *any) *any
+func cmapiterinit(mapType *byte, hmap map[any]any, hiter *any)
+func cmapiterinit_interlocked(mapType *byte, hmap map[any]any, hiter *any)
+func cmapiternext(hiter *any)
+func cmapiternext_interlocked(hiter *any)
+
 
 // *byte is really *runtime.Type
 func makechan(chanType *byte, hint int64) (hchan chan any)

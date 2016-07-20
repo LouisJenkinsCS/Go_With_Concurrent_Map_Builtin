@@ -6,21 +6,117 @@ import (
     "unsafe"
 )
 
-/*
-    TODO: While the concurrent map works for non fast types (string, uint32, and uint64) values,
-    it will fail and produce undefined behavior in a way, making me believe the compiler
-    does something special for fast types. Figure out what is causing this and fix it.
-
-    TODO: Randomize iteration order to reduce convoying (really good idea)
-*/
+// Prime numbers pre-generated for the interlocked iterator to use when determining randomized start position
+var primes = [...]int { 
+        2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 
+        31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 
+        73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 
+        127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 
+        179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 
+        233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 
+        283, 293, 307, 311, 313, 317, 331, 337, 347, 349, 
+        353, 359, 367, 373, 379, 383, 389, 397, 401, 409, 
+        419, 421, 431, 433, 439, 443, 449, 457, 461, 463, 
+        467, 479, 487, 491, 499, 503, 509, 521, 523, 541, 
+        547, 557, 563, 569, 571, 577, 587, 593, 599, 601, 
+        607, 613, 617, 619, 631, 641, 643, 647, 653, 659, 
+        661, 673, 677, 683, 691, 701, 709, 719, 727, 733, 
+        739, 743, 751, 757, 761, 769, 773, 787, 797, 809, 
+        811, 821, 823, 827, 829, 839, 853, 857, 859, 863, 
+        877, 881, 883, 887, 907, 911, 919, 929, 937, 941, 
+        947, 953, 967, 971, 977, 983, 991, 997, 1009, 1013, 
+        1019, 1021, 1031, 1033, 1039, 1049, 1051, 1061, 1063, 1069, 
+        1087, 1091, 1093, 1097, 1103, 1109, 1117, 1123, 1129, 1151, 
+        1153, 1163, 1171, 1181, 1187, 1193, 1201, 1213, 1217, 1223, 
+        1229, 1231, 1237, 1249, 1259, 1277, 1279, 1283, 1289, 1291, 
+        1297, 1301, 1303, 1307, 1319, 1321, 1327, 1361, 1367, 1373, 
+        1381, 1399, 1409, 1423, 1427, 1429, 1433, 1439, 1447, 1451, 
+        1453, 1459, 1471, 1481, 1483, 1487, 1489, 1493, 1499, 1511, 
+        1523, 1531, 1543, 1549, 1553, 1559, 1567, 1571, 1579, 1583, 
+        1597, 1601, 1607, 1609, 1613, 1619, 1621, 1627, 1637, 1657, 
+        1663, 1667, 1669, 1693, 1697, 1699, 1709, 1721, 1723, 1733, 
+        1741, 1747, 1753, 1759, 1777, 1783, 1787, 1789, 1801, 1811, 
+        1823, 1831, 1847, 1861, 1867, 1871, 1873, 1877, 1879, 1889, 
+        1901, 1907, 1913, 1931, 1933, 1949, 1951, 1973, 1979, 1987, 
+        1993, 1997, 1999, 2003, 2011, 2017, 2027, 2029, 2039, 2053, 
+        2063, 2069, 2081, 2083, 2087, 2089, 2099, 2111, 2113, 2129, 
+        2131, 2137, 2141, 2143, 2153, 2161, 2179, 2203, 2207, 2213, 
+        2221, 2237, 2239, 2243, 2251, 2267, 2269, 2273, 2281, 2287, 
+        2293, 2297, 2309, 2311, 2333, 2339, 2341, 2347, 2351, 2357, 
+        2371, 2377, 2381, 2383, 2389, 2393, 2399, 2411, 2417, 2423, 
+        2437, 2441, 2447, 2459, 2467, 2473, 2477, 2503, 2521, 2531, 
+        2539, 2543, 2549, 2551, 2557, 2579, 2591, 2593, 2609, 2617, 
+        2621, 2633, 2647, 2657, 2659, 2663, 2671, 2677, 2683, 2687, 
+        2689, 2693, 2699, 2707, 2711, 2713, 2719, 2729, 2731, 2741, 
+        2749, 2753, 2767, 2777, 2789, 2791, 2797, 2801, 2803, 2819, 
+        2833, 2837, 2843, 2851, 2857, 2861, 2879, 2887, 2897, 2903, 
+        2909, 2917, 2927, 2939, 2953, 2957, 2963, 2969, 2971, 2999, 
+        3001, 3011, 3019, 3023, 3037, 3041, 3049, 3061, 3067, 3079, 
+        3083, 3089, 3109, 3119, 3121, 3137, 3163, 3167, 3169, 3181, 
+        3187, 3191, 3203, 3209, 3217, 3221, 3229, 3251, 3253, 3257, 
+        3259, 3271, 3299, 3301, 3307, 3313, 3319, 3323, 3329, 3331, 
+        3343, 3347, 3359, 3361, 3371, 3373, 3389, 3391, 3407, 3413, 
+        3433, 3449, 3457, 3461, 3463, 3467, 3469, 3491, 3499, 3511, 
+        3517, 3527, 3529, 3533, 3539, 3541, 3547, 3557, 3559, 3571, 
+        3581, 3583, 3593, 3607, 3613, 3617, 3623, 3631, 3637, 3643, 
+        3659, 3671, 3673, 3677, 3691, 3697, 3701, 3709, 3719, 3727, 
+        3733, 3739, 3761, 3767, 3769, 3779, 3793, 3797, 3803, 3821, 
+        3823, 3833, 3847, 3851, 3853, 3863, 3877, 3881, 3889, 3907, 
+        3911, 3917, 3919, 3923, 3929, 3931, 3943, 3947, 3967, 3989, 
+        4001, 4003, 4007, 4013, 4019, 4021, 4027, 4049, 4051, 4057, 
+        4073, 4079, 4091, 4093, 4099, 4111, 4127, 4129, 4133, 4139, 
+        4153, 4157, 4159, 4177, 4201, 4211, 4217, 4219, 4229, 4231, 
+        4241, 4243, 4253, 4259, 4261, 4271, 4273, 4283, 4289, 4297, 
+        4327, 4337, 4339, 4349, 4357, 4363, 4373, 4391, 4397, 4409, 
+        4421, 4423, 4441, 4447, 4451, 4457, 4463, 4481, 4483, 4493, 
+        4507, 4513, 4517, 4519, 4523, 4547, 4549, 4561, 4567, 4583, 
+        4591, 4597, 4603, 4621, 4637, 4639, 4643, 4649, 4651, 4657, 
+        4663, 4673, 4679, 4691, 4703, 4721, 4723, 4729, 4733, 4751, 
+        4759, 4783, 4787, 4789, 4793, 4799, 4801, 4813, 4817, 4831, 
+        4861, 4871, 4877, 4889, 4903, 4909, 4919, 4931, 4933, 4937, 
+        4943, 4951, 4957, 4967, 4969, 4973, 4987, 4993, 4999, 5003, 
+        5009, 5011, 5021, 5023, 5039, 5051, 5059, 5077, 5081, 5087, 
+        5099, 5101, 5107, 5113, 5119, 5147, 5153, 5167, 5171, 5179, 
+        5189, 5197, 5209, 5227, 5231, 5233, 5237, 5261, 5273, 5279, 
+        5281, 5297, 5303, 5309, 5323, 5333, 5347, 5351, 5381, 5387, 
+        5393, 5399, 5407, 5413, 5417, 5419, 5431, 5437, 5441, 5443, 
+        5449, 5471, 5477, 5479, 5483, 5501, 5503, 5507, 5519, 5521, 
+        5527, 5531, 5557, 5563, 5569, 5573, 5581, 5591, 5623, 5639, 
+        5641, 5647, 5651, 5653, 5657, 5659, 5669, 5683, 5689, 5693, 
+        5701, 5711, 5717, 5737, 5741, 5743, 5749, 5779, 5783, 5791, 
+        5801, 5807, 5813, 5821, 5827, 5839, 5843, 5849, 5851, 5857, 
+        5861, 5867, 5869, 5879, 5881, 5897, 5903, 5923, 5927, 5939, 
+        5953, 5981, 5987, 6007, 6011, 6029, 6037, 6043, 6047, 6053, 
+        6067, 6073, 6079, 6089, 6091, 6101, 6113, 6121, 6131, 6133, 
+        6143, 6151, 6163, 6173, 6197, 6199, 6203, 6211, 6217, 6221, 
+        6229, 6247, 6257, 6263, 6269, 6271, 6277, 6287, 6299, 6301, 
+        6311, 6317, 6323, 6329, 6337, 6343, 6353, 6359, 6361, 6367, 
+        6373, 6379, 6389, 6397, 6421, 6427, 6449, 6451, 6469, 6473, 
+        6481, 6491, 6521, 6529, 6547, 6551, 6553, 6563, 6569, 6571, 
+        6577, 6581, 6599, 6607, 6619, 6637, 6653, 6659, 6661, 6673, 
+        6679, 6689, 6691, 6701, 6703, 6709, 6719, 6733, 6737, 6761, 
+        6763, 6779, 6781, 6791, 6793, 6803, 6823, 6827, 6829, 6833, 
+        6841, 6857, 6863, 6869, 6871, 6883, 6899, 6907, 6911, 6917, 
+        6947, 6949, 6959, 6961, 6967, 6971, 6977, 6983, 6991, 6997, 
+        7001, 7013, 7019, 7027, 7039, 7043, 7057, 7069, 7079, 7103, 
+        7109, 7121, 7127, 7129, 7151, 7159, 7177, 7187, 7193, 7207,
+        7211, 7213, 7219, 7229, 7237, 7243, 7247, 7253, 7283, 7297, 
+        7307, 7309, 7321, 7331, 7333, 7349, 7351, 7369, 7393, 7411, 
+        7417, 7433, 7451, 7457, 7459, 7477, 7481, 7487, 7489, 7499, 
+        7507, 7517, 7523, 7529, 7537, 7541, 7547, 7549, 7559, 7561, 
+        7573, 7577, 7583, 7589, 7591, 7603, 7607, 7621, 7639, 7643, 
+        7649, 7669, 7673, 7681, 7687, 7691, 7699, 7703, 7717, 7723, 
+        7727, 7741, 7753, 7757, 7759, 7789, 7793, 7817, 7823, 7829, 
+        7841, 7853, 7867, 7873, 7877, 7879, 7883, 7901, 7907, 7919,
+   }
 
 const (
     MAXZERO = 1024 // must match value in ../cmd/compile/internal/gc/walk.go
     
     // The maximum amount of buckets in a bucketArray
-    MAXBUCKETS = 16
+    DEFAULT_BUCKETS = 32
     // The maximum amount of buckets in a bucketData
-    MAXCHAIN = 8
+    MAX_CHAINED_BUCKETS = 8
 
     // bucketHdr is unlocked and points to a bucketData
     UNLOCKED = 0
@@ -33,7 +129,11 @@ const (
     EMPTY = 0
 
     // Maximum spins until exponential backoff kicks in
-    BACKOFF_AFTER_SPINS = 0
+    GOSCHED_AFTER_SPINS = 1
+    SLEEP_AFTER_SPINS = 5
+
+    // Default backoff
+    DEFAULT_BACKOFF = 1024
 
     // See hashmap.go, this obtains a properly aligned offset to the data
     cdataOffset = unsafe.Offsetof(struct {
@@ -94,10 +194,10 @@ type bucketArray struct {
 */
 type bucketData struct {
     // Hash of the key-value corresponding to this index. If it is 0, it is empty. Aligned to cache line (64 bytes)
-    hash [MAXCHAIN]uintptr
+    hash [MAX_CHAINED_BUCKETS]uintptr
     /*
-        key [MAXCHAIN]keyType
-        val [MAXCHAIN]valType
+        key [MAX_CHAINED_BUCKETS]keyType
+        val [MAX_CHAINED_BUCKETS]valType
     */
 }
 
@@ -115,12 +215,14 @@ type concurrentIterator struct {
     arr *bucketArray
     // The bucketData we are iterating over
     data bucketData
+    // For the interlocked iterator, keeps track of randomized root we started at (and will wrap to)
+    rootStartIdx uintptr
 }
 
 func (data *bucketData) key(t *maptype, idx uintptr) unsafe.Pointer {
     // Cast data to unsafe.Pointer to bypass Go's type system
     rawData := unsafe.Pointer(data)
-    // The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAXCHAIN
+    // The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAX_CHAINED_BUCKETS
     keyOffset := uintptr(rawData) + uintptr(cdataOffset)
     // Now the key at index 'idx' is located at idx * t.keysize
     ourKeyOffset := keyOffset + idx * uintptr(t.keysize)
@@ -130,10 +232,10 @@ func (data *bucketData) key(t *maptype, idx uintptr) unsafe.Pointer {
 func (data *bucketData) value(t *maptype, idx uintptr) unsafe.Pointer {
     // Cast data to unsafe.Pointer to bypass Go's type system
     rawData := unsafe.Pointer(data)
-    // The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAXCHAIN
+    // The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAX_CHAINED_BUCKETS
     keyOffset := uintptr(rawData) + uintptr(cdataOffset)
-    // The array of values are located at the end of the array of keys, located at MAXCHAIN * t.keysize
-    valueOffset := keyOffset + MAXCHAIN * uintptr(t.keysize)
+    // The array of values are located at the end of the array of keys, located at MAX_CHAINED_BUCKETS * t.keysize
+    valueOffset := keyOffset + MAX_CHAINED_BUCKETS * uintptr(t.keysize)
     // Now the value at index 'idx' is located at idx * t.valuesize
     ourValueOffset := valueOffset + idx * uintptr(t.valuesize)
     return unsafe.Pointer(ourValueOffset)
@@ -215,6 +317,17 @@ func (data *bucketData) update(t *maptype, idx uintptr, key, value unsafe.Pointe
 }
 
 func cmapiterinit(t *maptype, h *hmap, it *hiter) {
+    // Clear pointer fields so garbage collector does not complain.
+	it.key = nil
+	it.value = nil
+	it.t = nil
+	it.h = nil
+	it.buckets = nil
+	it.bptr = nil
+	it.overflow[0] = nil
+	it.overflow[1] = nil
+	it.citerHdr = nil
+
     // You cannot iterate a nil or empty map
     if h == nil || atomic.Load((*uint32)(unsafe.Pointer(&h.count))) == 0 {
         it.key = nil
@@ -231,10 +344,48 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
     it.citerHdr = unsafe.Pointer(citer)
     citer.arr = root
 
-    // By setting offset to MAXCHAIN, it allows it to bypass the findKeyValue portion without modification
-    citer.offset = MAXCHAIN
+    // By setting offset to MAX_CHAINED_BUCKETS, it allows it to bypass the findKeyValue portion without modification
+    citer.offset = MAX_CHAINED_BUCKETS
     
     cmapiternext(it)
+}
+
+func cmapiterinit_interlocked(t *maptype, h *hmap, it *hiter) {
+    // Clear pointer fields so garbage collector does not complain.
+	it.key = nil
+	it.value = nil
+	it.t = nil
+	it.h = nil
+	it.buckets = nil
+	it.bptr = nil
+	it.overflow[0] = nil
+	it.overflow[1] = nil
+	it.citerHdr = nil
+
+    // You cannot iterate a nil or empty map
+    if h == nil || atomic.Load((*uint32)(unsafe.Pointer(&h.count))) == 0 {
+        it.key = nil
+        it.value = nil
+        return
+    }
+
+    it.t = t
+    it.h = h
+
+    cmap := (*concurrentMap)(h.chdr)
+    arr := &cmap.root
+    citer := (*concurrentIterator)(newobject(t.concurrentiterator))
+    it.citerHdr = unsafe.Pointer(citer)
+    citer.arr = arr
+    
+    // By setting offset to MAX_CHAINED_BUCKETS, it allows it to bypass the findKeyValue portion without modification
+    citer.offset = MAX_CHAINED_BUCKETS
+    
+    // Randomized root start index is a random prime, modulo the number of root buckets
+    citer.rootStartIdx = uintptr(primes[fastrand1() % uint32(len(primes))] % DEFAULT_BUCKETS)
+    citer.idx = uint32((citer.rootStartIdx + 1) % DEFAULT_BUCKETS)
+
+    cmapiternext_interlocked(it)
 }
 
 /*
@@ -306,7 +457,7 @@ func cmapiternext(it *hiter) {
         citer.offset++
 
         // If there is more to find, do so
-        if offset < MAXCHAIN {
+        if offset < MAX_CHAINED_BUCKETS {
             // If this cell is empty, loop again
             if data.hash[offset] == EMPTY {
                 goto findKeyValue
@@ -328,7 +479,7 @@ func cmapiternext(it *hiter) {
             return
         }
 
-        // If the offset == MAXCHAIN, then we exhausted this bucketData, reset offset for next one 
+        // If the offset == MAX_CHAINED_BUCKETS, then we exhausted this bucketData, reset offset for next one 
         citer.offset = 0
     
     next:
@@ -361,7 +512,7 @@ func cmapiternext(it *hiter) {
         }
 
         spins = 0
-        backoff = 1
+        backoff = DEFAULT_BACKOFF
         g := getg()
         gptr := uintptr(unsafe.Pointer(g))
 
@@ -387,13 +538,38 @@ func cmapiternext(it *hiter) {
                     }
                     break
                 }
+                continue
             }
 
-            if spins > BACKOFF_AFTER_SPINS {
-                timeSleep(backoff)
-                backoff *= 2
+            // If it is not RECURSIVE or UNLOCKED, another thread holds this bucket; Tight-spin until no one holds the lock
+            for {
+                // Backoff
+                if spins > SLEEP_AFTER_SPINS {
+                    timeSleep(backoff)
+                    
+                    // ≈33ms
+                    if backoff < 33000000 {
+                        backoff *= 2
+                    }
+                } else if spins > GOSCHED_AFTER_SPINS {
+                    Gosched()
+                }
+                spins++
+
+                // We test the lock on each iteration
+                lock = atomic.Loaduintptr(&hdr.lock)
+                // If no one currently holds the lock it is either RECURSIVE or UNLOCKED, so re-enter outer loop
+                if lock == UNLOCKED || lock == RECURSIVE {
+                    if spins > 20 {
+                        println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+                    }
+                    break
+                }
             }
-            spins++
+            
+            // Reset backoff variables
+            spins = 0
+            backoff = DEFAULT_BACKOFF
         }
 
         // Atomic snapshot of the bucketData
@@ -401,6 +577,149 @@ func cmapiternext(it *hiter) {
         
         // Release lock
         atomic.Storeuintptr(&hdr.lock, UNLOCKED)
+
+        goto findKeyValue
+}
+
+func cmapiternext_interlocked(it *hiter) {
+    g := getg()
+    gptr := uintptr(unsafe.Pointer(g))
+    citer := (*concurrentIterator)(it.citerHdr)
+    var data *bucketData
+    t := it.t
+    var hdr *bucketHdr
+    var key, value unsafe.Pointer
+    spins := 0
+    var backoff int64 = 1
+
+    findKeyValue:
+        offset := uintptr(citer.offset)
+        citer.offset++
+
+        if g.releaseBucket != nil {
+            data = (*bucketData)((*bucketHdr)(g.releaseBucket).bucket)
+        }
+
+        // If there is more to find, do so
+        if offset < MAX_CHAINED_BUCKETS {
+            // If this cell is empty, loop again
+            if data.hash[offset] == EMPTY {
+                goto findKeyValue
+            }
+
+            // The key and values are present, but perform necessary indirection
+            key = data.key(t, offset)
+            if t.indirectkey {
+                key = *(*unsafe.Pointer)(key)
+            }
+            value = data.value(t, offset)
+            if t.indirectvalue {
+                value = *(*unsafe.Pointer)(value)
+            }
+
+            // Set the iterator's data and we're done
+            it.key = key
+            it.value = value
+            return
+        }
+
+        // If the offset == MAX_CHAINED_BUCKETS, then we exhausted this bucketData, reset offset for next one 
+        citer.offset = 0
+
+        // Since for interlocked iteration, we hold on to the lock until we no longer have more to iterate over, we must release it before acquiring a new one
+        maprelease()
+    
+    next:
+        // If this is the root, we need to make sure we wrap to rootStartIdx
+        if citer.arr.backLink == nil {
+            // If we wrapped around, we are done
+            if uintptr(citer.idx) == citer.rootStartIdx {
+                it.key = nil
+                it.value = nil
+                return
+            } else if citer.idx == uint32(len(citer.arr.data)) {
+                // Wrap around
+                citer.idx = 0
+            }
+        } else if citer.idx == uint32(len(citer.arr.data)) {
+            // In this case, we have finished iterating through this nested bucketArray, so go back one
+            citer.idx = citer.arr.backIdx
+            citer.arr = citer.arr.backLink
+
+            // Increment idx by one to move on to next bucketHdr
+            citer.idx++
+
+            goto next
+        }
+
+        // Obtain header (and forward index by one for next iteration)
+        hdr = &citer.arr.data[citer.idx]
+        citer.idx++
+
+        // Read ahead of time if we should skip to the next or attempt to lock and acquire (Test-And-Test-And-Set)
+        if atomic.Loadp(unsafe.Pointer(&hdr.bucket)) == nil {
+            goto next
+        }
+
+        spins = 0
+        backoff = DEFAULT_BACKOFF
+
+        for {
+            lock := atomic.Loaduintptr(&hdr.lock)
+
+            // If it's recursive, recurse through and start over
+            if lock == RECURSIVE {
+                citer.arr = (*bucketArray)(hdr.bucket)
+                citer.idx = 0
+                
+                goto next
+            }
+
+            // Acquire lock on bucket
+            if lock == UNLOCKED {
+                // Attempt to acquire
+                if atomic.Casuintptr(&hdr.lock, 0, gptr) {
+                    // If the bucket is nil, we can't iterate through it. Go to next one
+                    if hdr.bucket == nil {
+                        atomic.Storeuintptr(&hdr.lock, UNLOCKED)
+                        goto next
+                    }
+                    g.releaseBucket = unsafe.Pointer(hdr)
+                    break
+                }
+                continue
+            }
+
+            // If it is not RECURSIVE or UNLOCKED, another thread holds this bucket; Tight-spin until no one holds the lock
+            for {
+                // Backoff
+                if spins > SLEEP_AFTER_SPINS {
+                    timeSleep(backoff)
+
+                    // ≈33ms
+                    if backoff < 33000000 {
+                        backoff *= 2
+                    }
+                } else if spins > GOSCHED_AFTER_SPINS {
+                    Gosched()
+                }
+                spins++
+
+                // We test the lock on each iteration
+                lock = atomic.Loaduintptr(&hdr.lock)
+                // If no one currently holds the lock it is either RECURSIVE or UNLOCKED, so re-enter outer loop
+                if lock == UNLOCKED || lock == RECURSIVE {
+                    if spins > 20 {
+                        println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+                    }
+                    break
+                }
+            }
+            
+            // Reset backoff variables
+            spins = 0
+            backoff = DEFAULT_BACKOFF
+        }
 
         goto findKeyValue
 }
@@ -417,7 +736,7 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
     
     // Initialize and allocate our concurrentMap
     cmap := (*concurrentMap)(newobject(t.concurrentmap))
-    cmap.root.data = make([]bucketHdr, MAXBUCKETS)
+    cmap.root.data = make([]bucketHdr, DEFAULT_BUCKETS)
     cmap.root.seed = fastrand1()
 
 
@@ -445,7 +764,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
         idx = hash % uintptr(len(arr.data))
         hdr = &arr.data[idx]
         spins = 0
-        backoff = 1
+        backoff = DEFAULT_BACKOFF
 
         // Attempt to acquire lock
         for {
@@ -467,15 +786,40 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
                 // Attempt to acquire
                 if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
                     g.releaseBucket = unsafe.Pointer(hdr)
+                    // println("...g # ", g.goid, ": Acquired lock")
+                    break
+                }
+                continue
+            }
+
+            // If it is not RECURSIVE or UNLOCKED, another thread holds this bucket; Tight-spin until no one holds the lock
+            for {
+                if spins > SLEEP_AFTER_SPINS {
+                    timeSleep(backoff)
+                    
+                    // ≈33ms
+                    if backoff < 33000000 {
+                        backoff *= 2
+                    }
+                } else if spins > GOSCHED_AFTER_SPINS {
+                    Gosched()
+                }
+                spins++
+
+                // We test the lock on each iteration
+                lock = atomic.Loaduintptr(&hdr.lock)
+                // If no one currently holds the lock it is either RECURSIVE or UNLOCKED, so re-enter outer loop
+                if lock == UNLOCKED || lock == RECURSIVE {
+                    if spins > 20 {
+                        println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+                    }
                     break
                 }
             }
-
-            if spins > BACKOFF_AFTER_SPINS {
-                timeSleep(backoff)
-                backoff *= 2
-            }
-            spins++
+            
+            // Reset backoff variables
+            spins = 0
+            backoff = DEFAULT_BACKOFF
         }
         
         // If bucket is nil, then we allocate a new one.
@@ -492,7 +836,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
         firstEmpty := -1
 
         // Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
-        for i := 0; i < MAXCHAIN; i++ {
+        for i := 0; i < MAX_CHAINED_BUCKETS; i++ {
             currHash := data.hash[i]
             if currHash == EMPTY {
                 // Keep track of the first empty so we know what to assign into if we do not find a match
@@ -524,7 +868,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
             newArr.backIdx = uint32(idx)
 
             // Rehash and move all key-value pairs
-            for i := 0; i < MAXCHAIN; i++ {
+            for i := 0; i < MAX_CHAINED_BUCKETS; i++ {
                 k := data.key(t, uintptr(i))
                 v := data.value(t, uintptr(i))
 
@@ -542,7 +886,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
                 }
 
                 // If it is not nil, then we must scan for the first non-empty slot
-                for j := 0; j < MAXCHAIN; j++ {
+                for j := 0; j < MAX_CHAINED_BUCKETS; j++ {
                     currHash := newData.hash[j]
                     if currHash == EMPTY {
                         newData.assign(t, uintptr(j), newHash, k, v)
@@ -573,6 +917,7 @@ func maprelease() {
         hdr := (*bucketHdr)(g.releaseBucket)
 
         atomic.Storeuintptr(&hdr.lock, UNLOCKED)
+        // println("...g # ", g.goid, ": Released lock")
 
         g.releaseBucket = nil
     }
@@ -650,7 +995,7 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
         idx = hash % uintptr(len(arr.data))
         hdr = &arr.data[idx]
         spins = 0
-        backoff = 1
+        backoff = DEFAULT_BACKOFF
 
         // Save time by looking ahead of time (testing) if the header is nil
         if atomic.Loadp(unsafe.Pointer(&hdr.bucket)) == nil {
@@ -679,13 +1024,38 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
                     g.releaseBucket = unsafe.Pointer(hdr)
                     break
                 }
+                continue
             }
 
-            if spins > BACKOFF_AFTER_SPINS {
-                timeSleep(backoff)
-                backoff *= 2
+            // If it is not RECURSIVE or UNLOCKED, another thread holds this bucket; Tight-spin until no one holds the lock
+            for {
+                // Backoff
+                if spins > SLEEP_AFTER_SPINS {
+                    timeSleep(backoff)
+                    
+                    // ≈33ms
+                    if backoff < 33000000 {
+                        backoff *= 2
+                    }
+                } else if spins > GOSCHED_AFTER_SPINS {
+                    Gosched()
+                }
+                spins++
+
+                // We test the lock on each iteration
+                lock = atomic.Loaduintptr(&hdr.lock)
+                // If no one currently holds the lock it is either RECURSIVE or UNLOCKED, so re-enter outer loop
+                if lock == UNLOCKED || lock == RECURSIVE {
+                    if spins > 20 {
+                        println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+                    }
+                    break
+                }
             }
-            spins++
+            
+            // Reset backoff variables
+            spins = 0
+            backoff = DEFAULT_BACKOFF
         }
 
         // If the bucket is nil, then it is empty, stop here
@@ -696,7 +1066,7 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
         data := (*bucketData)(hdr.bucket)
         
         // Search the bucketData for the data needed
-        for i := 0; i < MAXCHAIN; i++ {
+        for i := 0; i < MAX_CHAINED_BUCKETS; i++ {
             currHash := data.hash[i]
             
             // Check if the hashes are equal
@@ -736,8 +1106,96 @@ func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
     return retval
 }
 
+/*
+    Priority/Locking Order:
+        A key's priority is the order in which it appears in the map, from top down. What this means
+        is this... imagine the following, the priorities are denoted by the number adjacent to it.
+
+        [] <= #1
+        [] <= #2
+        [] <= #3
+        [] <= #4
+
+        What this mean is that, keys are acquired in an order from top down. Now imagine a nested map
+
+        [] -----------------------> [] #1
+        [] -----------------> [] #5 [] #2
+        [] ----------> [] #9  [] #6 [] #3
+        [] --> [] #13  [] #10 [] #7 [] #4
+               [] #14  [] #11 [] #8
+               [] #15  [] #12  
+               [] #16
+        
+        Wherever a key happens to hash is the order it will be acquired in. 
+
+        Imagine the following:
+
+        [ ] -------------------------> [B] #1
+        [ ] ------------------> [ ] #5 [ ] #2
+        [ ] ----------> [E] #9  [ ] #6 [C] #3
+        [ ] -> [G] #13  [D] #10 [F] #7 [ ] #4
+               [ ] #14  [ ] #11 [ ] #8
+               [A] #15  [ ] #12  
+               [ ] #16
+        
+        The order of lock acquisition is:
+            {B, C, F, E, D, G, A}
+
+        Now what about if there is some mutations in between locating the appropriate bucketHdr's and acquiring their lock...
+
+        Deleted: B
+
+        [ ] -------------------------> [ ] #1
+        [ ] ------------------> [ ] #5 [ ] #2
+        [ ] ----------> [E] #9  [ ] #6 [C] #3
+        [ ] -> [G] #13  [D] #10 [F] #7 [ ] #4
+               [ ] #14  [ ] #11 [ ] #8
+               [A] #15  [ ] #12  
+               [ ] #16
+        
+        This is easy to handle, as we can just check if the key exists after acquring the lock. If it isn't present, depending on
+        what the user specified, we either allocate another object for the user, or return a failure (and let compiler generate code
+        for handling errors)
+
+        Now, lets try a more interesting problem...
+
+        Resized: B
+
+        [ ] --------------------------> [ ] -----> [ ] #1
+        [ ] ------------------> [ ] #8  [ ] #5     [ ] #2
+        [ ] ----------> [E] #12 [ ] #9  [C] #6     [B] #3
+        [ ] -> [G] #16  [D] #13 [F] #10 [ ] #7     [ ] #4
+               [ ] #17  [ ] #14 [ ] #11
+               [A] #18  [ ] #15  
+               [ ] #19
+
+        Note: The only change is that the priorities shifted by a set amount. This shift is mostly irrelevant, because
+        the lock acquisition order does not change:
+            {B, C, F, E, D, G, A}
+        
+        As keys cannot be moved, unless hashed to a recursive bucket (which may be a reason why we shouldn't limit nesting depth),
+        modifications are only an issue when you have more than one key assigned to a single bucket (upon which you handle those
+        respectively).
+
+        Sorry if I'm being unclear, a bit tired.
+*/
 func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
     println("Val: ", *(*int)(key))
+    if h.chdr == nil {
+        throw("sync.Interlocked invoked on a non-concurrent map!")
+    }
+    // // Dummy slice of keys (until we acquire multiple keys and pass them here)
+    // var keys []unsafe.Pointer
+    // cmap := (*concurrentMap)(h.chdr)
+
+    // var keyBuckets [16][]*bucketHdr
+    // for _, k := range keys {
+    //     arr := &cmap.root
+    //     hash := t.key.alg.hash(key, arr.seed)
+    //     idx := hash % uintptr(len(arr.data))
+    //     keyBuckets[idx] = append(keyBuckets[idx], &arr.data[idx])
+    // }
+
 
     return cmapaccess1(t, h, key)
 }
@@ -759,7 +1217,7 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
         idx = hash % uintptr(len(arr.data))
         hdr = &arr.data[idx]
         spins = 0
-        backoff = 1
+        backoff = DEFAULT_BACKOFF
 
         // Attempt to acquire lock
         for {
@@ -783,13 +1241,37 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
                     g.releaseBucket = unsafe.Pointer(hdr)
                     break
                 }
+                continue
             }
 
-            if spins > BACKOFF_AFTER_SPINS {
-                timeSleep(backoff)
-                backoff *= 2
+            // If it is not RECURSIVE or UNLOCKED, another thread holds this bucket; Tight-spin until no one holds the lock
+            for {
+                if spins > SLEEP_AFTER_SPINS {
+                    timeSleep(backoff)
+                    
+                    // ≈33ms
+                    if backoff < 33000000 {
+                        backoff *= 2
+                    }
+                } else if spins > GOSCHED_AFTER_SPINS {
+                    Gosched()
+                }
+                spins++
+
+                // We test the lock on each iteration
+                lock = atomic.Loaduintptr(&hdr.lock)
+                // If no one currently holds the lock it is either RECURSIVE or UNLOCKED, so re-enter outer loop
+                if lock == UNLOCKED || lock == RECURSIVE {
+                    if spins > 20 {
+                        println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+                    }
+                    break
+                }
             }
-            spins++
+            
+            // Reset backoff variables
+            spins = 0
+            backoff = DEFAULT_BACKOFF
         }
 
         // If the bucket is nil, then the key is not present in the map
@@ -800,8 +1282,8 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
         data := (*bucketData)(hdr.bucket)
 
         // Number of buckets empty; used to signify whether or not we should delete this bucket when we finish.
-        isEmpty := MAXCHAIN
-        for i := 0; i < MAXCHAIN; i++ {
+        isEmpty := MAX_CHAINED_BUCKETS
+        for i := 0; i < MAX_CHAINED_BUCKETS; i++ {
             currHash := data.hash[i]
 
             if currHash == EMPTY {
@@ -829,7 +1311,7 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
                     isEmpty++
 
                     // We save time by directly looping through the rest of the hashes to determine if there are other non-empty indice, besides this one, if we haven't found one already
-                    for j := i + 1; isEmpty == MAXCHAIN && j < MAXCHAIN; j++ {
+                    for j := i + 1; isEmpty == MAX_CHAINED_BUCKETS && j < MAX_CHAINED_BUCKETS; j++ {
                         // If it is not empty, we decrement the count of empty index
                         if data.hash[j] != 0 {
                             isEmpty--
@@ -840,8 +1322,8 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
             }
         }
 
-        // If isEmpty == MAXCHAIN, then there are no indice still in use, so we delete the bucket to allow the iterator an easier time
-        if isEmpty == MAXCHAIN {
+        // If isEmpty == MAX_CHAINED_BUCKETS, then there are no indice still in use, so we delete the bucket to allow the iterator an easier time
+        if isEmpty == MAX_CHAINED_BUCKETS {
             hdr.bucket = nil
         }
 }

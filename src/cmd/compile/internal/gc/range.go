@@ -233,17 +233,32 @@ func walkrange(n *Node) {
 		keysym := th.Field(0).Sym // depends on layout of iterator struct.  See reflect.go:hiter
 		valsym := th.Field(1).Sym // ditto
 
-		if (n.flags & isInterlockedRange) != 0 {
-			println("sync.Interlocked keyword recognized!")
-		}
+		var fn *Node
 
-		fn := syslook("mapiterinit")
+		if ha.Type.IsCMap() {
+			if (n.flags & isInterlockedRange) != 0 {
+				fn = syslook("cmapiterinit_interlocked")
+			} else {
+				fn = syslook("cmapiterinit")
+			}
+		} else {
+			fn = syslook("mapiterinit")
+		}
 
 		fn = substArgTypes(fn, t.Key(), t.Val(), th)
 		init = append(init, mkcall1(fn, nil, nil, typename(t), ha, Nod(OADDR, hit, nil)))
 		n.Left = Nod(ONE, NodSym(ODOT, hit, keysym), nodnil())
 
-		fn = syslook("mapiternext")
+		if ha.Type.IsCMap() {
+			if (n.flags & isInterlockedRange) != 0 {
+				fn = syslook("cmapiternext_interlocked")
+			} else {
+				fn = syslook("cmapiternext")
+			}
+		} else {
+			fn = syslook("mapiternext")
+		}
+		
 		fn = substArgTypes(fn, th)
 		n.Right = mkcall1(fn, nil, nil, Nod(OADDR, hit, nil))
 

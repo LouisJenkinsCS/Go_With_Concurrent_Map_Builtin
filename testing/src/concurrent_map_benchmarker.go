@@ -35,7 +35,7 @@ func main() {
                     producersDone++
                     if producersDone == 8 {
                         for k, v := range chars {
-                        fmt.Printf("Rune: %v;Occurence: %v\n", string(k), v)
+                            fmt.Printf("Rune: %v;Occurence: %v\n", string(k), v)
                         }
                         wg.Done()
                         return
@@ -50,7 +50,7 @@ func main() {
 
                 goFunc := func(data []rune) { 
                             for _, c := range data {
-                                sync.Interlocked chars {
+                                sync.Interlocked chars[c] {
                                     chars[c] += 1
                                 }
                             }
