@@ -2045,8 +2045,7 @@ OpSwitch:
 		ok |= Etop
 		t := n.List.First().Type
 		if t != nil {
-			n.Left.Type = t.MapType().Val
-			if t.IsMap()  {
+			if !t.IsMap()  {
 				Yyerror("sync.Interlocked requires an assignment from an rvalue map!Received %v of type %v", n.List.First(), t)
 			}
 		}

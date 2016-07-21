@@ -5,7 +5,7 @@ import (
     "time"
     "fmt"
     "sync"
-     "github.com/pkg/profile"
+     _ "github.com/pkg/profile"
 )
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -24,7 +24,7 @@ func main() {
     wg := sync.WaitGroup{}
     producerDone := make(chan int)
     wg.Add(9)
-    prof := profile.Start(profile.CPUProfile, profile.ProfilePath("."), profile.NoShutdownHook)
+    // prof := profile.Start(profile.CPUProfile, profile.ProfilePath("."), profile.NoShutdownHook)
     go func() {
         chars := make(map[rune]uint64, 0, 1)
         producersDone := 0
@@ -84,5 +84,5 @@ func main() {
         }()
     }
     wg.Wait()
-    prof.Stop()
+    // prof.Stop()
 }
