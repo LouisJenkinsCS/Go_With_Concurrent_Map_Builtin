@@ -1,0 +1,4 @@
+Map,MOPS-1,MOPS-2,MOPS-4,MOPS-8,MOPS-16,MOPS-32
+ConcurrentMap,3.36,6.02,12.35,18.87,17.24,16.95
+SynchronizedMap,4.10,3.42,2.71,2.44,2.40,2.43
+ReaderWriterMap,4.26,2.23,1.62,1.61,1.61,1.57

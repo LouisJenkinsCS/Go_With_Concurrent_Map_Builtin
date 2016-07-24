@@ -1,2 +1,0 @@
-package iterator_testing
-

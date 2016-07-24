@@ -1,0 +1,20 @@
+BenchmarkIntsetGenerate            	100000000	       316 ns/op
+BenchmarkIntsetGenerate-2          	200000000	       229 ns/op
+BenchmarkIntsetGenerate-4          	200000000	       240 ns/op
+BenchmarkIntsetGenerate-8          	200000000	       290 ns/op
+BenchmarkIntsetGenerate-16         	100000000	       301 ns/op
+BenchmarkIntsetGenerate-32         	100000000	       314 ns/op
+BenchmarkIntsetGenerate_sync       	200000000	       273 ns/op
+BenchmarkIntsetGenerate_sync-2     	100000000	       354 ns/op
+BenchmarkIntsetGenerate_sync-4     	100000000	       420 ns/op
+BenchmarkIntsetGenerate_sync-8     	100000000	       487 ns/op
+BenchmarkIntsetGenerate_sync-16    	100000000	       520 ns/op
+BenchmarkIntsetGenerate_sync-32    	100000000	       540 ns/op
+BenchmarkIntsetGenerate_rw         	200000000	       285 ns/op
+BenchmarkIntsetGenerate_rw-2       	100000000	       627 ns/op
+BenchmarkIntsetGenerate_rw-4       	100000000	       803 ns/op
+BenchmarkIntsetGenerate_rw-8       	50000000	       810 ns/op
+BenchmarkIntsetGenerate_rw-16      	50000000	       771 ns/op
+BenchmarkIntsetGenerate_rw-32      	100000000	       761 ns/op
+PASS
+ok  	intset_testing	1083.349s

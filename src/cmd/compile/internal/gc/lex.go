@@ -555,6 +555,7 @@ func (l *lexer) ident(c rune) {
 			if lookAhead, err := l.bin.Peek(11); err == nil && string(lookAhead) == "Interlocked" {
 				cp.WriteByte(byte(c))
 			} else {
+				Yyerror("Did you meant 'sync.Interlocked'?")
 				break
 			}
 		} else {

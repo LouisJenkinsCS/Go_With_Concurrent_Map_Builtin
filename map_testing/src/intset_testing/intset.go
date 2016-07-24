@@ -4,9 +4,8 @@ import "sync"
 import "math/rand"
 import "time"
 import "settings"
-import "testing"
 
-func BenchmarkIntsetGenerate(b *testing.B) {
+func ConcurrentIntset(nGoroutines int) int64 {
     cmap := make(map[int64]settings.Unused, 0, 1)
 
     // Initialize to half full
@@ -16,15 +15,14 @@ func BenchmarkIntsetGenerate(b *testing.B) {
     for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
         delete(cmap, int64(i))
     }
-    b.ResetTimer()
 
-    b.RunParallel(func(pb *testing.PB) {
+    return ParallelTest(nGoroutines, func() {
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
         maxElements := settings.INTSET_VALUE_RANGE / 4
         
-        for pb.Next() {
+        for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
             rngRatio := rng.Float64()
-            randNum := rand.Int63n(int64(settings.INTSET_VALUE_RANGE))
+            randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
             switch {
                 // 0 <= rngRatio < LOOKUP -> Do Lookup
                 case rngRatio < settings.INTSET_FAIR_LOOKUP_RATIO: 
@@ -45,10 +43,34 @@ func BenchmarkIntsetGenerate(b *testing.B) {
                     delete(cmap, randNum)
             }
         }
-    })
+    }).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE * uint64(nGoroutines))
 }
 
-func BenchmarkIntsetGenerate_sync(b *testing.B) {
+func ParallelTest(nGoroutines int, callback func()) time.Duration {
+    // Initialize and setup the waitgroup to allow fair start time.
+    var start, done sync.WaitGroup
+    start.Add(1)
+    done.Add(nGoroutines)
+
+    // Spawn nGoroutine Goroutines, which wait for a start signal, process the callback, then notify when done
+    for i := 0; i < nGoroutines; i++ {
+        go func() {
+            start.Wait()
+            callback()
+            done.Done()
+        }()
+    }
+
+    // Start the benchmark and collect time
+    start.Done()
+    t := time.Now()
+    done.Wait()
+
+    // Finished, return the time taken here.
+    return time.Since(t)
+}
+
+func SynchronizedIntset(nGoroutines int) int64 {
     smap := make(map[int64]settings.Unused)
     mtx := sync.Mutex{}
 
@@ -59,15 +81,14 @@ func BenchmarkIntsetGenerate_sync(b *testing.B) {
     for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
         delete(smap, int64(i))
     }
-    b.ResetTimer()
 
-    b.RunParallel(func(pb *testing.PB) {
+    return ParallelTest(nGoroutines, func() {
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
-        maxElements := settings.INTSET_VALUE_RANGE / 4
+        maxElements := settings.INTSET_VALUE_RANGE
         
-        for pb.Next() {
+        for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
             rngRatio := rng.Float64()
-            randNum := rand.Int63n(int64(settings.INTSET_VALUE_RANGE))
+            randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
             switch {
                 // 0 <= rngRatio < LOOKUP -> Do Lookup
                 case rngRatio < settings.INTSET_FAIR_LOOKUP_RATIO: 
@@ -95,10 +116,10 @@ func BenchmarkIntsetGenerate_sync(b *testing.B) {
                     mtx.Unlock()
             }
         }
-    })
+    }).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE * uint64(nGoroutines))
 }
 
-func BenchmarkIntsetGenerate_rw(b *testing.B) {
+func ReaderWriterIntset(nGoroutines int) int64 {
     rwmap := make(map[int64]settings.Unused)
     mtx := sync.RWMutex{}
 
@@ -109,15 +130,14 @@ func BenchmarkIntsetGenerate_rw(b *testing.B) {
     for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
         delete(rwmap, int64(i))
     }
-    b.ResetTimer()
 
-    b.RunParallel(func(pb *testing.PB) {
+    return ParallelTest(nGoroutines, func() {
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
         maxElements := settings.INTSET_VALUE_RANGE / 4
         
-        for pb.Next() {
+        for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
             rngRatio := rng.Float64()
-            randNum := rand.Int63n(int64(settings.INTSET_VALUE_RANGE))
+            randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
             switch {
                 // 0 <= rngRatio < LOOKUP -> Do Lookup
                 case rngRatio < settings.INTSET_FAIR_LOOKUP_RATIO: 
@@ -145,5 +165,5 @@ func BenchmarkIntsetGenerate_rw(b *testing.B) {
                     mtx.Unlock()
             }
         }
-    })
+    }).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE * uint64(nGoroutines))
 }
