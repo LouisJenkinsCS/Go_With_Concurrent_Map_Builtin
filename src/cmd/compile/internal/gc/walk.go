@@ -18,13 +18,8 @@ const (
 
 // We should release immediately following statement
 const immediateRelease = 1 << 0
-// Release is handled in a sync.Interlocked statement
-const interlockedRelease = 1 << 1
 // State of whether or not we should append an automatic release
-var releaseFlags int = 0
-
-// Map Sym we are looking for in the current context
-var interlockedMap *Sym
+var releaseFlags int
 
 // L.J: Injected call to release the bucketHdr
 func concurrentMapRelease(init *Nodes) *Node {
@@ -308,9 +303,6 @@ func walkstmt(n *Node) *Node {
 		key = walkexpr(key, &n.Ninit)
 		t := map_.Type
 		
-		interlockedMap = map_.Sym
-		releaseFlags = interlockedRelease
-
 		var newBody []*Node
 		tmpKey := temp(t.MapType().Key)
 		tmpAddr := Nod(OADDR, tmpKey, nil)
@@ -324,8 +316,6 @@ func walkstmt(n *Node) *Node {
 		newBody = append(newBody, mkcall1(syslook("maprelease"), nil, &n.Ninit))
 		n.Nbody.Set(newBody)
 		walkstmtlist(n.Nbody.Slice())
-
-		releaseFlags = 0
 
 	case OPROC:
 		switch n.Left.Op {
@@ -768,15 +758,6 @@ opswitch:
 		n.Left = walkexpr(n.Left, init)
 		n.Left = safeexpr(n.Left, init)
 
-		// If we are in the scope of a sync.Interlocked block
-		if releaseFlags == interlockedRelease {
-			// We are looking for things like autotmp_* = key. Have to keep track of everything
-			if istemp(n.Left) && n.Right != nil && !iszero(n.Right) {
-				// TODO: Anything
-				// fmt.Printf("Mapped %v to %v\n", n.Left, n.Right)
-			}
-		}
-
 		if oaslit(n, init) {
 			break
 		}
@@ -978,12 +959,11 @@ opswitch:
 		n = typecheck(n, Etop)
 		n = walkexpr(n, init)
 
-		if releaseFlags != interlockedRelease {
-			rFn := concurrentMapRelease(init)
-			rFn.Ninit.Append(n)
-			rFn = walkexpr(rFn, init)
-			n = rFn
-		}
+		rFn := concurrentMapRelease(init)
+		rFn.Ninit.Append(n)
+		rFn = walkexpr(rFn, init)
+		n = rFn
+
 
 	case ODELETE:
 		init.AppendNodes(&n.Ninit)
@@ -992,25 +972,16 @@ opswitch:
 		map_ = walkexpr(map_, init)
 		key = walkexpr(key, init)
 
-		if releaseFlags == interlockedRelease {
-			if map_.Sym == interlockedMap {
-				// TODO: Anything
-
-			}
-		}
-
 		// orderstmt made sure key is addressable.
 		key = Nod(OADDR, key, nil)
 
 		t := map_.Type
 		n = mkcall1(mapfndel("mapdelete", t), nil, init, typename(t), map_, key)
-		if releaseFlags != interlockedRelease {
-			rFn := concurrentMapRelease(init)
-			rFn.Ninit.Append(n)
-			rFn = walkexpr(rFn, init)
-			n = rFn
-		}
-		
+		rFn := concurrentMapRelease(init)
+		rFn.Ninit.Append(n)
+		rFn = walkexpr(rFn, init)
+		n = rFn
+	
 
 	case OAS2DOTTYPE:
 		e := n.Rlist.First() // i.(T)
@@ -1306,15 +1277,6 @@ opswitch:
 		n.Left = walkexpr(n.Left, init)
 		n.Right = walkexpr(n.Right, init)
 
-		// If we are in the scope of a sync.Interlocked block
-		if releaseFlags == interlockedRelease {
-			// If this is the map we are interlocking the keys for
-			if n.Left.Sym == interlockedMap {
-				// fmt.Printf("Matched Map: %v\n", n.Left)
-				// TODO: Anything
-			}
-		}
-
 		t := n.Left.Type
 		p := ""
 		if t.Val().Width <= 128 { // Check ../../runtime/hashmap.go:maxValueSize before changing.
@@ -1350,9 +1312,7 @@ opswitch:
 		n = Nod(OIND, n, nil)
 		n.Type = t.Val()
 		n.Typecheck = 1
-		if releaseFlags != interlockedRelease {
-			releaseFlags = immediateRelease
-		}
+		releaseFlags = immediateRelease
 
 	case ORECV:
 		Fatalf("walkexpr ORECV") // should see inside OAS only
@@ -2301,12 +2261,10 @@ func convas(n *Node, init *Nodes) *Node {
 
 		val = Nod(OADDR, val, nil)
 		n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
-		if releaseFlags != interlockedRelease {
-			rFn := concurrentMapRelease(init)
-			rFn.Ninit.Append(n)
-			rFn = walkexpr(rFn, init)
-			n = rFn
-		}
+		rFn := concurrentMapRelease(init)
+		rFn.Ninit.Append(n)
+		rFn = walkexpr(rFn, init)
+		n = rFn
 		goto out
 	}
 

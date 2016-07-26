@@ -30,13 +30,7 @@ func intsetTest() {
 }
 
 func main() {
-    m := make(map[int]int, 0, 1)
-    for i := 0; i < 100; i++ {
-        m[i] = i
-    }
-    for k, v := range sync.Interlocked m {
-        fmt.Printf("%v:%v\n", k, v)
-    }
+    map_testing.TestConcurrentMap()
     // cmap_runTest_iter()
     // intsetTest()
 }

@@ -16,7 +16,7 @@ func ConcurrentIntset(nGoroutines int) int64 {
         delete(cmap, int64(i))
     }
 
-    return ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(nGoroutines, func() {
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
         maxElements := settings.INTSET_VALUE_RANGE / 4
         
@@ -46,30 +46,6 @@ func ConcurrentIntset(nGoroutines int) int64 {
     }).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE * uint64(nGoroutines))
 }
 
-func ParallelTest(nGoroutines int, callback func()) time.Duration {
-    // Initialize and setup the waitgroup to allow fair start time.
-    var start, done sync.WaitGroup
-    start.Add(1)
-    done.Add(nGoroutines)
-
-    // Spawn nGoroutine Goroutines, which wait for a start signal, process the callback, then notify when done
-    for i := 0; i < nGoroutines; i++ {
-        go func() {
-            start.Wait()
-            callback()
-            done.Done()
-        }()
-    }
-
-    // Start the benchmark and collect time
-    start.Done()
-    t := time.Now()
-    done.Wait()
-
-    // Finished, return the time taken here.
-    return time.Since(t)
-}
-
 func SynchronizedIntset(nGoroutines int) int64 {
     smap := make(map[int64]settings.Unused)
     mtx := sync.Mutex{}
@@ -82,7 +58,7 @@ func SynchronizedIntset(nGoroutines int) int64 {
         delete(smap, int64(i))
     }
 
-    return ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(nGoroutines, func() {
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
         maxElements := settings.INTSET_VALUE_RANGE
         
@@ -131,7 +107,7 @@ func ReaderWriterIntset(nGoroutines int) int64 {
         delete(rwmap, int64(i))
     }
 
-    return ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(nGoroutines, func() {
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
         maxElements := settings.INTSET_VALUE_RANGE / 4
         

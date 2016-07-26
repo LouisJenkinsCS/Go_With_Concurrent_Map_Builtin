@@ -9,8 +9,8 @@ type point struct {
 }
 
 const (
-    ROWS = 32
-    COLS = 10000
+    ROWS = 8
+    COLS = 1000000
     TESTS = 100
 )
 

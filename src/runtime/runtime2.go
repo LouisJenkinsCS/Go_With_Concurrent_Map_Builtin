@@ -375,6 +375,7 @@ type g struct {
 
 	// L.J Injected concurrent map pointer to bucket to be released
 	releaseBucket unsafe.Pointer
+	releaseDepth uintptr
 }
 
 type m struct {

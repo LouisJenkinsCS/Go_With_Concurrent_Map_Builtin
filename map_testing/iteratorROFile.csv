@@ -1,0 +1,4 @@
+Map-IteratorRO,1,2,4,8,16,32
+ConcurrentMap,15.87,13.70,14.08,5.05,3.79,2.45
+ConcurrentMap-Interlocked,17.86,15.62,15.38,7.81,3.85,2.28
+DefaultMap,33.33,28.57,23.26,11.76,7.52,3.97

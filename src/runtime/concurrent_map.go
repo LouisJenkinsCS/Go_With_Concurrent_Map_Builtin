@@ -720,6 +720,7 @@ func cmapiternext_interlocked(it *hiter) {
             spins = 0
             backoff = DEFAULT_BACKOFF
         }
+        g.releaseDepth++
 
         goto findKeyValue
 }
@@ -821,6 +822,8 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
             spins = 0
             backoff = DEFAULT_BACKOFF
         }
+
+        g.releaseDepth++
         
         // If bucket is nil, then we allocate a new one.
         if hdr.bucket == nil {
@@ -902,6 +905,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
             // Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for the key-value pairs.
             // In this case, simply mark the bucket as RECURSIVE and try again, to reduce contention and increase concurrency over the lock
             arr = newArr
+            g.releaseDepth--
             atomic.Storeuintptr(&hdr.lock, RECURSIVE)
             goto next
         }
@@ -916,10 +920,14 @@ func maprelease() {
         // println("g #", g.goid, ": released lock")
         hdr := (*bucketHdr)(g.releaseBucket)
 
-        atomic.Storeuintptr(&hdr.lock, UNLOCKED)
-        // println("...g # ", g.goid, ": Released lock")
+        g.releaseDepth--
+        if g.releaseDepth == 0 {
+            atomic.Storeuintptr(&hdr.lock, UNLOCKED)
+            // println("...g # ", g.goid, ": Released lock")
 
-        g.releaseBucket = nil
+            g.releaseBucket = nil
+        }
+        
     }
 }
 
@@ -1057,6 +1065,8 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
             spins = 0
             backoff = DEFAULT_BACKOFF
         }
+
+        g.releaseDepth++
 
         // If the bucket is nil, then it is empty, stop here
         if hdr.bucket == nil {
@@ -1273,6 +1283,8 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
             spins = 0
             backoff = DEFAULT_BACKOFF
         }
+
+        g.releaseDepth++
 
         // If the bucket is nil, then the key is not present in the map
         if hdr.bucket == nil {

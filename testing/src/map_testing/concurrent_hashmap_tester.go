@@ -54,11 +54,12 @@ func all_map_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
 		// The current 'i' when the Goroutine is spawned determines the points it generates
 		go func(idx int) {
+			rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 			adds, retrieves, deletes, iterations := 0, 0, 0, 0
 			var timeAdding, timeRetrieving, timeDeleting, timeIterating time.Duration
 			lastAdded := -1
 			for j := 0; j < COLS; j++ {
-				r := rand.Int()
+				r := rng.Int()
 				// The operation is done at random
 				start := time.Now()
 				if r % iteration_modulo == 0 {
