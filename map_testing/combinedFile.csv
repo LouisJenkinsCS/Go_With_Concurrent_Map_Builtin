@@ -1,5 +1,5 @@
 Map-Combined,1,2,4,8,16,32
-ConcurrentMap,11.24,19.23,30.30,47.62,71.43,90.91
-ConcurrentMap-Interlocked,11.24,18.87,29.41,45.45,62.50,83.33
-SynchronizedMap,15.38,16.95,20.83,25.00,20.83,21.28
-ReaderWriterMap,16.67,16.39,16.13,14.93,16.39,16.39
+ConcurrentMap,11.90,19.23,35.71,47.62,71.43,90.91
+ConcurrentMap-Interlocked,10.64,18.18,33.33,58.82,62.50,71.43
+SynchronizedMap,14.08,19.23,20.41,27.78,23.81,20.83
+ReaderWriterMap,16.13,14.93,15.87,15.87,15.62,16.13
