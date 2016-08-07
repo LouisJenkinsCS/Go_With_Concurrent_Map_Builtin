@@ -536,7 +536,8 @@ next:
 
 		// If we already own the lock, then we're iterating while in a sync.Interlocked block, which is forbidden (Don't know how we got here then)
 		if lock == gptr {
-			throw("Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
+			println("...g # ", g.goid, ": Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
+			break
 		}
 
 		// Tight-Spin until no one holds the lock
@@ -696,7 +697,9 @@ next:
 
 		// If we already own the lock, then we're iterating while in a sync.Interlocked block, which is forbidden (Don't know how we got here then)
 		if lock == gptr {
-			throw("Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
+			g.releaseBucket = unsafe.Pointer(hdr)
+			println("...g # ", g.goid, ": Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
+			break
 		}
 
 		// Tight-Spin until no one holds the lock
