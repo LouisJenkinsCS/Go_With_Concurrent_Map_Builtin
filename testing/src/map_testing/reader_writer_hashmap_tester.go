@@ -4,7 +4,8 @@ import "sync"
 import "fmt"
 import "math/rand"
 import "time"
-import _ "../github.com/pkg/profile"
+
+// import _ "../github.com/pkg/profile"
 
 var rwlock sync.RWMutex
 var rw_map map[point]point
@@ -13,7 +14,7 @@ var rwc chan int
 
 func populate_map_rw_struct() {
 	for i := 0; i < ROWS; i++ {
-		go func (idx int) { 
+		go func(idx int) {
 			for j := 0; j < COLS; j++ {
 				// val := fmt.Sprintf("{%v, %v}", idx, j)
 				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
@@ -31,7 +32,7 @@ func populate_map_rw_struct() {
 
 func delete_map_rw_struct() {
 	for i := 0; i < ROWS; i++ {
-		go func (idx int) {
+		go func(idx int) {
 			for j := 0; j < COLS; j++ {
 				key := point{idx, j}
 				rwlock.Lock()
@@ -45,7 +46,7 @@ func delete_map_rw_struct() {
 
 func iterate_map_rw_struct() {
 	for i := 0; i < ROWS; i++ {
-		go func () {
+		go func() {
 			rwlock.RLock()
 			for k, v := range rw_map {
 				expected := point{ROWS - k.x, COLS - k.y}
@@ -61,61 +62,61 @@ func iterate_map_rw_struct() {
 }
 
 func test_map_insertion_accuracy_rw() {
-    passed := true
-    c := make(chan int)
+	passed := true
+	c := make(chan int)
 	for i := 0; i < ROWS; i++ {
-        go func (idx int) {
-            for j := 0; j < COLS; j++ {
-                key := point{idx, j}
-                val := point{ROWS - idx, COLS - j}
+		go func(idx int) {
+			for j := 0; j < COLS; j++ {
+				key := point{idx, j}
+				val := point{ROWS - idx, COLS - j}
 				rwlock.RLock()
-                retval := rw_map[key]
+				retval := rw_map[key]
 				rwlock.RUnlock()
-                if retval != val {
-                    fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
-                    passed = false
-                }
-            }
-            c <- 0
-        }(i)
+				if retval != val {
+					fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
+					passed = false
+				}
+			}
+			c <- 0
+		}(i)
 	}
 
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 
-    if !passed {
-        panic("Failed Insertion Accuracy Test!!!")
-    }
+	if !passed {
+		panic("Failed Insertion Accuracy Test!!!")
+	}
 }
 
 func test_map_deletion_accuracy_rw() {
-    passed := true
-    c := make(chan int)
-    for i := 0; i < ROWS; i++ {
-        go func (idx int) {
-            for j := 0; j < COLS; j++ {
-                key := point{idx, j}
-                val := point{0, 0}
+	passed := true
+	c := make(chan int)
+	for i := 0; i < ROWS; i++ {
+		go func(idx int) {
+			for j := 0; j < COLS; j++ {
+				key := point{idx, j}
+				val := point{0, 0}
 				rwlock.Lock()
-                retval := rw_map[key]
-			    rwlock.Unlock()
-                if retval != val {
-                    fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
-                    passed = false
-                }
-            }
-            c <- 0
-        }(i)
+				retval := rw_map[key]
+				rwlock.Unlock()
+				if retval != val {
+					fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
+					passed = false
+				}
+			}
+			c <- 0
+		}(i)
 	}
 
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 
-    if !passed {
-        panic("Failed Deletion Accuracy Test!!!")
-    }
+	if !passed {
+		panic("Failed Deletion Accuracy Test!!!")
+	}
 }
 
 func all_map_struct_rw() {
@@ -133,7 +134,7 @@ func all_map_struct_rw() {
 				r := rand.Int()
 				// The operation is done at random
 				start := time.Now()
-				if r % iteration_modulo == 0 {
+				if r%iteration_modulo == 0 {
 					rwlock.RLock()
 					for k, v := range rw_map {
 						expected := point{ROWS - k.x, COLS - k.y}
@@ -144,7 +145,7 @@ func all_map_struct_rw() {
 					rwlock.RUnlock()
 					timeIterating += time.Since(start)
 					iterations++
-				} else if r % retrieve_modulo == 0 {
+				} else if r%retrieve_modulo == 0 {
 					rwlock.RLock()
 					key := point{idx, lastAdded}
 					expected := point{0, 0}
@@ -159,7 +160,7 @@ func all_map_struct_rw() {
 					rwlock.RUnlock()
 					timeRetrieving += time.Since(start)
 					retrieves++
-				} else if r % delete_modulo == 0 {
+				} else if r%delete_modulo == 0 {
 					rwlock.Lock()
 					if lastAdded != -1 {
 						delete(rw_map, point{ROWS - idx, COLS - lastAdded})
@@ -190,24 +191,24 @@ func TestRWLockMap() {
 	c = make(chan int)
 	insertTime := make([]time.Duration, TESTS)
 	deleteTime := make([]time.Duration, TESTS)
-	retrieveTime := make([]time.Duration, TESTS * 2)
+	retrieveTime := make([]time.Duration, TESTS*2)
 	iterationTime := make([]time.Duration, TESTS)
 
 	all_map_struct_rw()
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 	fmt.Printf("[ReaderWriter Map] Successfully completed the all_map_struct test!")
 	if TESTS == 0 {
 		return
 	}
-	
+
 	for iterations := 0; iterations < TESTS; iterations++ {
 		// log.Printf("[ReaderWriter Map] ~Trial #%v~ Populating with %v elements...", iterations + 1, ROWS * COLS)
 		start := time.Now()
 		populate_map_rw_struct()
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 
 		end := time.Since(start)
@@ -220,12 +221,12 @@ func TestRWLockMap() {
 		start = time.Now()
 		test_map_insertion_accuracy_rw()
 		end = time.Since(start)
-		retrieveTime[iterations * 2] = end
+		retrieveTime[iterations*2] = end
 
 		start = time.Now()
 		iterate_map_rw_struct()
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 		end = time.Since(start)
 		iterationTime[iterations] = end
@@ -234,7 +235,7 @@ func TestRWLockMap() {
 		start = time.Now()
 		delete_map_rw_struct()
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 		end = time.Since(start)
 		deleteTime[iterations] = end
@@ -243,7 +244,7 @@ func TestRWLockMap() {
 		start = time.Now()
 		test_map_deletion_accuracy_rw()
 		end = time.Since(start)
-		retrieveTime[(iterations * 2) + 1] = end
+		retrieveTime[(iterations*2)+1] = end
 	}
 	fmt.Printf("[ReaderWriter Map] Average Insertion Time: %v\n", averageTime(insertTime))
 	fmt.Printf("[ReaderWriter Map] Average Retrieval Time: %v\n", averageTime(retrieveTime))

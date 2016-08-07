@@ -870,6 +870,7 @@ next:
 	if hdr.count == 0 {
 		data.assign(t, 0, hash, key, val)
 		atomic.Xadduintptr(&hdr.count, 1)
+		atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 		return
 	}
 
@@ -968,6 +969,7 @@ next:
 	data.assign(t, uintptr(firstEmpty), hash, key, val)
 	// Since we just assigned to a new empty slot, we need to increment count
 	atomic.Xadduintptr(&hdr.count, 1)
+	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), -1)
 }
 
 func maprelease() {

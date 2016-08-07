@@ -4,7 +4,8 @@ import "sync"
 import "fmt"
 import "time"
 import "math/rand"
-import _ "../github.com/pkg/profile"
+
+// import _ "../github.com/pkg/profile"
 
 var mtx sync.Mutex
 var default_map map[point]point
@@ -13,7 +14,7 @@ var c chan int
 
 func populate_map_sync_struct() {
 	for i := 0; i < ROWS; i++ {
-		go func (idx int) { 
+		go func(idx int) {
 			for j := 0; j < COLS; j++ {
 				// val := fmt.Sprintf("{%v, %v}", idx, j)
 				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
@@ -31,7 +32,7 @@ func populate_map_sync_struct() {
 
 func delete_map_sync_struct() {
 	for i := 0; i < ROWS; i++ {
-		go func (idx int) {
+		go func(idx int) {
 			for j := 0; j < COLS; j++ {
 				key := point{idx, j}
 				mtx.Lock()
@@ -45,7 +46,7 @@ func delete_map_sync_struct() {
 
 func iterate_map_sync_struct() {
 	for i := 0; i < ROWS; i++ {
-		go func () {
+		go func() {
 			mtx.Lock()
 			for k, v := range default_map {
 				expected := point{ROWS - k.x, COLS - k.y}
@@ -60,61 +61,61 @@ func iterate_map_sync_struct() {
 }
 
 func test_map_insertion_accuracy_sync() {
-    passed := true
-    c := make(chan int)
+	passed := true
+	c := make(chan int)
 	for i := 0; i < ROWS; i++ {
-        go func (idx int) {
-            for j := 0; j < COLS; j++ {
-                key := point{idx, j}
-                val := point{ROWS - idx, COLS - j}
+		go func(idx int) {
+			for j := 0; j < COLS; j++ {
+				key := point{idx, j}
+				val := point{ROWS - idx, COLS - j}
 				mtx.Lock()
-                retval := default_map[key]
+				retval := default_map[key]
 				mtx.Unlock()
-                if retval != val {
-                    fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
-                    passed = false
-                }
-            }
-            c <- 0
-        }(i)
+				if retval != val {
+					fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
+					passed = false
+				}
+			}
+			c <- 0
+		}(i)
 	}
 
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 
-    if !passed {
-        panic("Failed Insertion Accuracy Test!!!")
-    }
+	if !passed {
+		panic("Failed Insertion Accuracy Test!!!")
+	}
 }
 
 func test_map_deletion_accuracy_sync() {
-    passed := true
-    c := make(chan int)
-    for i := 0; i < ROWS; i++ {
-        go func (idx int) {
-            for j := 0; j < COLS; j++ {
-                key := point{idx, j}
-                val := point{0, 0}
+	passed := true
+	c := make(chan int)
+	for i := 0; i < ROWS; i++ {
+		go func(idx int) {
+			for j := 0; j < COLS; j++ {
+				key := point{idx, j}
+				val := point{0, 0}
 				mtx.Lock()
-                retval := default_map[key]
+				retval := default_map[key]
 				mtx.Unlock()
-                if retval != val {
-                    fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
-                    passed = false
-                }
-            }
-            c <- 0
-        }(i)
+				if retval != val {
+					fmt.Printf("Key: %v;Expected: %v;Received: %v", key, val, retval)
+					passed = false
+				}
+			}
+			c <- 0
+		}(i)
 	}
 
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 
-    if !passed {
-        panic("Failed Deletion Accuracy Test!!!")
-    }
+	if !passed {
+		panic("Failed Deletion Accuracy Test!!!")
+	}
 }
 
 func all_map_struct_sync() {
@@ -133,7 +134,7 @@ func all_map_struct_sync() {
 				// The operation is done at random
 				start := time.Now()
 				mtx.Lock()
-				if r % iteration_modulo == 0 {
+				if r%iteration_modulo == 0 {
 					for k, v := range default_map {
 						expected := point{ROWS - k.x, COLS - k.y}
 						if v != expected {
@@ -144,7 +145,7 @@ func all_map_struct_sync() {
 					mtx.Unlock()
 					timeIterating += time.Since(start)
 					iterations++
-				} else if r % retrieve_modulo == 0 {
+				} else if r%retrieve_modulo == 0 {
 					key := point{idx, lastAdded}
 					expected := point{0, 0}
 					retval := default_map[key]
@@ -158,7 +159,7 @@ func all_map_struct_sync() {
 					mtx.Unlock()
 					timeRetrieving += time.Since(start)
 					retrieves++
-				} else if r % delete_modulo == 0 {
+				} else if r%delete_modulo == 0 {
 					if lastAdded != -1 {
 						delete(default_map, point{ROWS - idx, COLS - lastAdded})
 						deletes++
@@ -187,24 +188,24 @@ func TestDefaultMap() {
 	c = make(chan int)
 	insertTime := make([]time.Duration, TESTS)
 	deleteTime := make([]time.Duration, TESTS)
-	retrieveTime := make([]time.Duration, TESTS * 2)
+	retrieveTime := make([]time.Duration, TESTS*2)
 	iterationTime := make([]time.Duration, TESTS)
 
 	all_map_struct_sync()
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 	fmt.Printf("[Synchronized Map] Successfully completed the all_map_struct test!")
 	if TESTS == 0 {
 		return
 	}
-	
+
 	for iterations := 0; iterations < TESTS; iterations++ {
 		// log.Printf("[Synchronized Map] ~Trial #%v~ Populating with %v elements...", iterations + 1, ROWS * COLS)
 		start := time.Now()
 		populate_map_sync_struct()
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 
 		end := time.Since(start)
@@ -217,12 +218,12 @@ func TestDefaultMap() {
 		start = time.Now()
 		test_map_insertion_accuracy_sync()
 		end = time.Since(start)
-		retrieveTime[iterations * 2] = end
+		retrieveTime[iterations*2] = end
 
 		start = time.Now()
 		iterate_map_sync_struct()
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 		end = time.Since(start)
 		iterationTime[iterations] = end
@@ -231,7 +232,7 @@ func TestDefaultMap() {
 		start = time.Now()
 		delete_map_sync_struct()
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 		end = time.Since(start)
 		deleteTime[iterations] = end
@@ -240,7 +241,7 @@ func TestDefaultMap() {
 		start = time.Now()
 		test_map_deletion_accuracy_sync()
 		end = time.Since(start)
-		retrieveTime[(iterations * 2) + 1] = end
+		retrieveTime[(iterations*2)+1] = end
 	}
 	fmt.Printf("[Synchronized Map] Average Insertion Time: %v\n", averageTime(insertTime))
 	fmt.Printf("[Synchronized Map] Average Retrieval Time: %v\n", averageTime(retrieveTime))
