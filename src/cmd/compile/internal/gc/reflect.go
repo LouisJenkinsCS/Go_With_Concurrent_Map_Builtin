@@ -9,6 +9,7 @@ import (
 	"cmd/internal/obj"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -294,16 +295,18 @@ func bucketData(t *Type) *Type {
 		valtype = Ptrto(valtype)
 	}
 
-
 	keyArr := typArray(keytype, int64(nChains))
 	valArr := typArray(valtype, int64(nChains))
 	keyArr.Noalg = true
 	valArr.Noalg = true
 
-	var field [3]*Field
-	field[0] = makefield("hash", typArray(Types[TUINTPTR], int64(nChains)))
-	field[1] = makefield("keys", keyArr)
-	field[2] = makefield("values", valArr)
+	var field [6]*Field
+	field[0] = makefield("lock", Types[TUINTPTR])
+	field[1] = makefield("count", Types[TUINTPTR])
+	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
+	field[3] = makefield("hash", typArray(Types[TUINTPTR], int64(nChains)))
+	field[4] = makefield("keys", keyArr)
+	field[5] = makefield("values", valArr)
 
 	bdata.SetFields(field[:])
 	dowidth(bdata)
@@ -319,9 +322,10 @@ func bucketHdr(t *Type) *Type {
 		return t.MapType().BucketHdr
 	}
 
-	var field [2]*Field
+	var field [3]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
-	field[1] = makefield("bucket", Types[TUNSAFEPTR])
+	field[1] = makefield("count", Types[TUINTPTR])
+	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
 
 	bhdr := typ(TSTRUCT)
 	bhdr.Noalg = true
@@ -342,11 +346,14 @@ func bucketArray(t *Type) *Type {
 	barr := typ(TSTRUCT)
 	barr.Noalg = true
 
-	var field [4]*Field
-	field[0] = makefield("data", typSlice(bucketHdr(t)))
-	field[1] = makefield("seed", Types[TUINT32])
-	field[2] = makefield("backIdx", Types[TUINT32])
-	field[3] = makefield("backLink", Types[TUNSAFEPTR])
+	var field [7]*Field
+	field[0] = makefield("lock", Types[TUINTPTR])
+	field[1] = makefield("count", Types[TUINTPTR])
+	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
+	field[3] = makefield("seed", Types[TUINT32])
+	field[4] = makefield("backIdx", Types[TUINT32])
+	field[5] = makefield("backLink", Types[TUNSAFEPTR])
+	field[6] = makefield("buckets", typSlice(Ptrto(bucketHdr(t))))
 
 	barr.SetFields(field[:])
 	dowidth(barr)
@@ -362,8 +369,8 @@ func bucketArray(t *Type) *Type {
 */
 func concurrentMap(t *Type) *Type {
 	if t.MapType().ConcurrentMap != nil {
-		return t.MapType().ConcurrentMap;
-	} 
+		return t.MapType().ConcurrentMap
+	}
 
 	var field [1]*Field
 	field[0] = makefield("root", bucketArray(t))
@@ -377,6 +384,27 @@ func concurrentMap(t *Type) *Type {
 	cmap.StructType().Map = t
 
 	return cmap
+}
+
+// Used to obtain the size of a cache-line, used for padding to reduce false-sharing in concurrent map
+func cacheLineSize() int {
+	cacheLineSize := -1
+	switch runtime.GOARCH {
+	case "386", "amd64", "ppc64", "ppc64le":
+		cacheLineSize = 64
+	case "arm", "arm64", "mips64", "mips64le":
+		cacheLineSize = 32
+	case "s390x":
+		cacheLineSize = 256
+	default:
+		Yyerror("Invalid GOARCH for padding: %v", runtime.GOARCH)
+	}
+
+	if cacheLineSize == -1 {
+		Yyerror("Invalid GOARCH for padding: %v", runtime.GOARCH)
+	}
+
+	return cacheLineSize
 }
 
 // f is method type, with receiver.
