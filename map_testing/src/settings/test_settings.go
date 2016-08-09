@@ -20,7 +20,7 @@ var NUM_GOROUTINES int
 var ITERATOR_POOLED_ELEMENTS uint64
 
 // ITERATOR_NUM_ELEMS is used to determine, in iterator tests, how many elements are added to the map to be iterated over
-var ITERATOR_NUM_ELEMS int64 = 1000000
+var ITERATOR_NUM_ELEMS int64 = 10000
 
 // ITERATOR_RNG_INCREMENT is used to determine, in iterator tests, the range of the randomized integer used to test for when
 // the element's 'iter' field should be incremented
@@ -28,7 +28,7 @@ var ITERATOR_RNG_INCREMENT int64 = 10
 
 // ITERATOR_NUM_ITERATIONS is used to determine, in iterator tests, how many full iterations through the map should be performed.
 // By default, this value is 1000.
-var ITERATOR_NUM_ITERATIONS uint64 = 100000
+var ITERATOR_NUM_ITERATIONS uint64 = 10000
 
 // INTSET_OPS_PER_GOROUTINE is used to determine just how many randomized operations are performed per Goroutine during an integer set test.
 // By default, this value is 1000000.
@@ -75,6 +75,8 @@ var COMBINED_OPS_PER_GOROUTINE int64 = 1000000
 
 // COMBINED_FAIR_RATIO is used during the combined test the frequency that it will perform any operation, with the same frequency
 var COMBINED_FAIR_RATIO float64 = .25
+
+var COMBINED_SKIM_NON_ITERATION_RATIO float64 = .325
 
 // COMBINED_KEY_RANGE is the range of generated 64-bit signed integer keys using during the combined test
 var COMBINED_KEY_RANGE int64 = 10000
