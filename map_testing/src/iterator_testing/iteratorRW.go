@@ -19,7 +19,8 @@ func ConcurrentIterator_RW(nGoroutines int) int64 {
 
     // Begin iteration test
     return settings.ParallelTest(nGoroutines, func() {
-        for k, _ := range cmap {
+        for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+            for k, _ := range cmap {
             sync.Interlocked cmap[k] {
                 // Read-Modify-Write operation to increment struct field atomically
                 t := cmap[k]
@@ -27,7 +28,8 @@ func ConcurrentIterator_RW(nGoroutines int) int64 {
                 cmap[k] = t
             }
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS)
+    }
+    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
@@ -40,16 +42,18 @@ func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
 
     // Begin iteration test
     return settings.ParallelTest(nGoroutines, func() {
-        for k, v := range sync.Interlocked cmap {
-            // Does nothing as 'v' is very value, but necessary so it isn't blank; Haven't typechecked blank types correctly
-            v.iter++
+        for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+            for k, v := range sync.Interlocked cmap {
+                // Does nothing as 'v' is very value, but necessary so it isn't blank; Haven't typechecked blank types correctly
+                v.iter++
 
-            // Read-Modify-Write operation to increment struct field atomically
-            t := cmap[k]
-            t.iter++
-            cmap[k] = t
+                // Read-Modify-Write operation to increment struct field atomically
+                t := cmap[k]
+                t.iter++
+                cmap[k] = t
+            }
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS)
+    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func SynchronizedIterator_RW(nGoroutines int) int64 {
@@ -63,18 +67,20 @@ func SynchronizedIterator_RW(nGoroutines int) int64 {
 
     // Begin iteration test
     return settings.ParallelTest(nGoroutines, func() {
-        // Required to lock before iteration begins... huge bottleneck
-        mtx.Lock()
-        for k, v := range smap {
-            v.iter++
+        for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+            // Required to lock before iteration begins... huge bottleneck
+            mtx.Lock()
+            for k, v := range smap {
+                v.iter++
 
-            // Read-Modify-Write operation to increment struct field atomically
-            t := smap[k]
-            t.iter++
-            smap[k] = t
+                // Read-Modify-Write operation to increment struct field atomically
+                t := smap[k]
+                t.iter++
+                smap[k] = t
+            }
+            mtx.Unlock()
         }
-        mtx.Unlock()
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS)
+    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func ReaderWriterIterator_RW(nGoroutines int) int64 {
@@ -88,18 +94,20 @@ func ReaderWriterIterator_RW(nGoroutines int) int64 {
 
     // Begin iteration test
     return settings.ParallelTest(nGoroutines, func() {
-        // Required to lock before iteration begins... huge bottleneck, plus no promotion from reader lock to write lock
-        mtx.Lock()
-        for k, v := range rwmap {
-            v.iter++
-            
-            // Read-Modify-Write operation to increment struct field atomically
-            t := rwmap[k]
-            t.iter++
-            rwmap[k] = t
+        for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+            // Required to lock before iteration begins... huge bottleneck, plus no promotion from reader lock to write lock
+            mtx.Lock()
+            for k, v := range rwmap {
+                v.iter++
+                
+                // Read-Modify-Write operation to increment struct field atomically
+                t := rwmap[k]
+                t.iter++
+                rwmap[k] = t
+            }
+            mtx.Unlock()
         }
-        mtx.Unlock()
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS)
+    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func ChannelIterator_RW(nGoroutines int) int64 {
@@ -146,5 +154,5 @@ func ChannelIterator_RW(nGoroutines int) int64 {
         // Signify we are done (another special case)
         ch <- -1
         done.Wait()
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS)
+    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }

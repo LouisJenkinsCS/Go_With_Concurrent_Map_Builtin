@@ -13,6 +13,51 @@ func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) 
 }
 
 func main() {
+	endEarly := true
+	if endEarly {
+		combinedSkimFile, err := os.Create("combinedSkim.csv")
+		if err != nil {
+			panic("Cannot create combinedSkim.csv")
+		}
+
+		// Header - CombinedSkim
+		combinedSkimFile.WriteString(fmt.Sprintf("Map-CombinedSkim"))
+		for i := 1; i <= 32; i = i << 1 {
+			combinedSkimFile.WriteString(fmt.Sprintf(",%v", i))
+		}
+		combinedSkimFile.WriteString("\n")
+
+		// Concurrent Map
+		combinedSkimFile.WriteString(fmt.Sprintf("ConcurrentMap"))
+		for i := 1; i <= 32; i = i << 1 {
+			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombinedSkim)))
+		}
+		combinedSkimFile.WriteString("\n")
+
+		// Concurrent Map - Interlocked
+		combinedSkimFile.WriteString(fmt.Sprintf("ConcurrentMap-Interlocked"))
+		for i := 1; i <= 32; i = i << 1 {
+			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombinedSkim_Interlocked)))
+		}
+		combinedSkimFile.WriteString("\n")
+
+		// Synchronized Map
+		combinedSkimFile.WriteString(fmt.Sprintf("SynchronizedMap"))
+		for i := 1; i <= 32; i = i << 1 {
+			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.SynchronizedCombinedSkim)))
+		}
+		combinedSkimFile.WriteString("\n")
+
+		// ReaderWriter Map
+		combinedSkimFile.WriteString(fmt.Sprintf("ReaderWriterMap"))
+		for i := 1; i <= 32; i = i << 1 {
+			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ReaderWriterCombinedSkim)))
+		}
+		combinedSkimFile.WriteString("\n")
+		combinedSkimFile.Close()
+
+		return
+	}
 	// Create files to dump information to
 	var intsetFile, iteratorROFile, iteratorRWFile, combinedFile *os.File
 	intsetFile, err := os.Create("intset.csv")

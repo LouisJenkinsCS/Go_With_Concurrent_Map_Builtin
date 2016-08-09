@@ -1,5 +1,5 @@
 Map-IteratorRW,1,2,4,8,16,32
-ConcurrentMap,3.88,3.70,3.19,2.62,1.31,0.66
-ConcurrentMap-Interlocked,4.33,4.24,3.79,2.92,1.60,0.73
-SynchronizedMap,17.86,9.43,4.33,2.27,1.14,0.59
-ReaderWriterMap,19.61,9.62,4.83,2.33,1.11,0.57
+ConcurrentMap,5.41,5.08,4.74,2.84,1.67,0.82
+ConcurrentMap-Interlocked,6.37,5.88,5.52,3.91,1.90,0.96
+SynchronizedMap,20.41,9.62,4.65,2.33,1.16,0.58
+ReaderWriterMap,19.61,9.62,4.67,2.25,1.15,0.57

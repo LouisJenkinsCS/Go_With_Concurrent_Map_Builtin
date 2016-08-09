@@ -1,13 +1,13 @@
 package map_testing
 
-import _ "../github.com/pkg/profile"
+// import _ "../github.com/pkg/profile"
 import "fmt"
 import "time"
 import "math/rand"
 
 func populate_map_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
-		go func (idx int) { 
+		go func(idx int) {
 			for j := 0; j < COLS; j++ {
 				key, val := point{idx, j}, point{ROWS - idx, COLS - j}
 				m[key] = point{0, 0}
@@ -20,7 +20,7 @@ func populate_map_struct(m map[point]point) {
 
 func delete_map_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
-		go func (idx int) {
+		go func(idx int) {
 			for j := 0; j < COLS; j++ {
 				key := point{idx, j}
 				delete(m, key)
@@ -32,7 +32,7 @@ func delete_map_struct(m map[point]point) {
 
 func iterate_map_struct(m map[point]point) {
 	for i := 0; i < ROWS; i++ {
-		go func () {
+		go func() {
 			// j := 0
 			for k, v := range m {
 				expected := point{ROWS - k.x, COLS - k.y}
@@ -62,7 +62,7 @@ func all_map_struct(m map[point]point) {
 				r := rng.Int()
 				// The operation is done at random
 				start := time.Now()
-				if r % iteration_modulo == 0 {
+				if r%iteration_modulo == 0 {
 					for k, v := range m {
 						expected := point{ROWS - k.x, COLS - k.y}
 						if v != expected {
@@ -72,7 +72,7 @@ func all_map_struct(m map[point]point) {
 					}
 					timeIterating += time.Since(start)
 					iterations++
-				} else if r % retrieve_modulo == 0 {
+				} else if r%retrieve_modulo == 0 {
 					key := point{idx, lastAdded}
 					expected := point{0, 0}
 					retval := m[key]
@@ -85,7 +85,7 @@ func all_map_struct(m map[point]point) {
 					}
 					timeRetrieving += time.Since(start)
 					retrieves++
-				} else if r % delete_modulo == 0 {
+				} else if r%delete_modulo == 0 {
 					if lastAdded != -1 {
 						delete(m, point{ROWS - idx, COLS - lastAdded})
 						deletes++
@@ -113,15 +113,15 @@ func TestConcurrentMap() {
 	c = make(chan int)
 	insertTime := make([]time.Duration, TESTS)
 	deleteTime := make([]time.Duration, TESTS)
-	retrieveTime := make([]time.Duration, TESTS * 2)
+	retrieveTime := make([]time.Duration, TESTS*2)
 	iterationTime := make([]time.Duration, TESTS)
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	// prof := profile.Start(profile.CPUProfile, profile.ProfilePath("."), profile.NoShutdownHook)
 	all_map_struct(m)
-    for i := 0; i < ROWS; i++ {
-        <- c
-    }
+	for i := 0; i < ROWS; i++ {
+		<-c
+	}
 	fmt.Printf("[Concurrent Map] Successfully completed the all_map_struct test!\n")
 	if TESTS == 0 {
 		return
@@ -132,7 +132,7 @@ func TestConcurrentMap() {
 		start := time.Now()
 		populate_map_struct(m)
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 
 		end := time.Since(start)
@@ -145,12 +145,12 @@ func TestConcurrentMap() {
 		start = time.Now()
 		test_map_insertion_accuracy(m)
 		end = time.Since(start)
-		retrieveTime[iterations * 2] = end
+		retrieveTime[iterations*2] = end
 
 		start = time.Now()
 		iterate_map_struct(m)
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 		end = time.Since(start)
 		iterationTime[iterations] = end
@@ -159,7 +159,7 @@ func TestConcurrentMap() {
 		start = time.Now()
 		delete_map_struct(m)
 		for i := 0; i < ROWS; i++ {
-			<- c
+			<-c
 		}
 		end = time.Since(start)
 		deleteTime[iterations] = end
@@ -168,7 +168,7 @@ func TestConcurrentMap() {
 		start = time.Now()
 		test_map_deletion_accuracy(m)
 		end = time.Since(start)
-		retrieveTime[(iterations * 2) + 1] = end
+		retrieveTime[(iterations*2)+1] = end
 	}
 	// prof.Stop()
 	fmt.Printf("[Concurrent Map] Average Insertion Time: %v\n", averageTime(insertTime))
