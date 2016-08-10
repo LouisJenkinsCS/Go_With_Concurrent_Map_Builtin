@@ -1375,3 +1375,122 @@ next:
 		atomic.Xadduintptr(&arr.count, ^uintptr(0))
 	}
 }
+
+/*
+	sync.Interlocked variants of map functions. These are a more optimized variants of the normal map functions above, which
+	take advantage of sync.Interlock's Interlocked-only access invariant. Each function will test if the attempted access key
+	is the same as the interlocked (currently acquired) key. Any other keys violate the one-bucket-per-Goroutine invariant.
+
+	The variants use a structure which keeps track of the information needed for fast access to the interlocked key-value pair,
+	aptly interlockedInfo. If a key is 'deleted'
+*/
+
+/*
+	Interlocked version of mapaccess do a fast key comparison, and then return the value associated with it.
+*/
+func cmapaccess_interlocked(t *maptype, h *hmap, info *interlockedInfo, key unsafe.Pointer) unsafe.Pointer {
+	// Do not allow accesses with keys not currently owned.
+	if !t.key.alg.equal(info.key, key) {
+		throw("Key indexed must be same as interlocked key!")
+	}
+
+	// If the key had been 'deleted', return the zero'd portion
+	if (info.flags & KEY_DELETED) != 0 {
+		return unsafe.Pointer(&DUMMY_RETVAL[0])
+	}
+
+	// Otherwise return the value directly
+	return info.value
+}
+
+/*
+	Interlocked version of mapassign does a fast key comparison, and then writes to the value itself
+*/
+func cmapassign_interlocked(t *maptype, h *hmap, info *interlockedInfo, key, value unsafe.Pointer) {
+	k := info.key
+	v := info.value
+
+	// Perform some indirection on key if necessary; necessary for test of equality
+	if t.indirectkey {
+		k = *(*unsafe.Pointer)(k)
+	}
+
+	// Do not allow accesses with keys not currently owned.
+	if !t.key.alg.equal(k, key) {
+		throw("Key indexed must be same as interlocked key!")
+	}
+
+	// Since we will be doing a memcpy regardless of if it is present or not, unset the KEY_DELETED bit, but keep track of old value
+	present := (info.flags & KEY_DELETED) == 0
+	info.flags &= ^KEY_DELETED
+
+	// In the case that the key was present, we are updating, hence we need to check if we also need to update the key as well
+	if present {
+		// Perform some indirection if necessary
+		if t.indirectvalue {
+			v = *(*unsafe.Pointer)(v)
+		}
+
+		// If we are required to update key, do so
+		if t.needkeyupdate {
+			typedmemmove(t.key, k, key)
+		}
+
+		typedmemmove(t.elem, v, value)
+	} else {
+		// In the case it has been deleted and we assigning again, we do a direct assignment
+		// Perform indirection needed
+		if t.indirectvalue {
+			// println(".........g #", getg().goid, ": Value is indirect")
+			vmem := newobject(t.elem)
+			*(*unsafe.Pointer)(v) = vmem
+			v = vmem
+		}
+
+		typedmemmove(t.elem, v, value)
+
+		// Increment since we decrement when we originally delete it.
+		atomic.Xadduintptr(&info.hdr.count, 1)
+		atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
+	}
+}
+
+func cmapdelete_interlocked(t *maptype, h *hmap, info *interlockedInfo, key unsafe.Pointer) {
+	// Do not allow accesses with keys not currently owned.
+	if !t.key.alg.equal(info.key, key) {
+		throw("Key indexed must be same as interlocked key!")
+	}
+
+	// If the key had already been 'deleted' we're done.
+	if (info.flags & KEY_DELETED) != 0 {
+		return
+	}
+
+	// Update flags and zero value
+	info.flags &= KEY_DELETED
+	memclr(info.value, uintptr(t.valuesize))
+	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), -1)
+	atomic.Xadduintptr(&info.hdr.count, ^uintptr(0))
+}
+
+func maprelease_interlocked(t *maptype, h *hmap, info *interlockedInfo) {
+	// Handle cases where the current key has been marked for deletion. At this point, the corresponding value has already been zero'd.
+	// Note, for iteration it must handle deleting its own keys after each successful iteration.
+	if (info.flags & KEY_DELETED) != 0 {
+		memclr(unsafe.Pointer(info.key), uintptr(t.keysize))
+		*info.hash = EMPTY
+	}
+
+	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
+	if info.hdr.count == 0 {
+		// Invalidate and release the bucket (as it is being deleted)
+		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(info.hdrPtr)), nil)
+		atomic.Storeuintptr(&info.hdr.lock, INVALID)
+
+		// Also decrement number of buckets
+		atomic.Xadduintptr(&info.parentHdr.count, ^uintptr(0))
+	} else {
+		// Otherwise, just release the lock on the bucket
+		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
+	}
+}

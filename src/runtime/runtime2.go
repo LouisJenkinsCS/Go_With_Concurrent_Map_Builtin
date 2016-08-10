@@ -375,7 +375,7 @@ type g struct {
 
 	// L.J Injected concurrent map pointer to bucket to be released
 	releaseBucket unsafe.Pointer
-	releaseDepth uintptr
+	releaseDepth  uintptr
 }
 
 type m struct {
@@ -738,3 +738,24 @@ var (
 	islibrary bool // -buildmode=c-shared
 	isarchive bool // -buildmode=c-archive
 )
+
+/*
+	Data-Types for sync.Interlocked blocks (region and range contexts)
+*/
+
+type interlockedInfo struct {
+	// The bucketData we currently have locked.
+	hdr *bucketHdr
+	// The pointer to the header (or rather, pointer to it's position in the bucketArray's slice) for invalidation when releasing the bucket.
+	hdrPtr **bucketHdr
+	// The pointer to the parent bucketHdr (meaning the bucketArray) so we can decrement count when we delete hdr
+	parentHdr *bucketHdr
+	// The pointer to the key inside of the hdr, for fast access.
+	key unsafe.Pointer
+	// The pointer to the value inside of the hdr, for fast access.
+	value unsafe.Pointer
+	// The pointer to the 'hash' inside of the hdr, for fast access.
+	hash *uintptr
+	// Extra flags
+	flags uintptr
+}
