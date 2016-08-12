@@ -354,7 +354,7 @@ func decodetype_methods(s *LSym) []methodsig {
 	case kindChan: // reflect.chanType
 		off += 2 * SysArch.PtrSize
 	case kindMap: // reflect.mapType
-		off += 9*SysArch.PtrSize + 8
+		off += 10*SysArch.PtrSize + 8
 	case kindInterface: // reflect.interfaceType
 		off += SysArch.PtrSize + 2*SysArch.IntSize
 	default:

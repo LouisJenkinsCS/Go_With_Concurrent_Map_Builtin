@@ -146,6 +146,8 @@ const (
 	// Maximum backoff; 33 milliseconds
 	MAX_BACKOFF = 33000000
 
+	KEY_DELETED = uintptr(1 << 0)
+
 	// See hashmap.go, this obtains a properly aligned offset to the data
 	// Is used to obtain the array of keys and values at the end of the runtime representation of the bucketData type.
 	cdataOffset = unsafe.Offsetof(struct {
@@ -1217,13 +1219,178 @@ func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	bucket, but until instrumentation in the compiler, it will do. Note that the acquired bucket does not have it's lock released until after the call to maprelease
 	explicitly at the end of the region due to how the compiler prevents implicit maprelease calls.
 */
-func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	println("Val: ", *(*int)(key))
+func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) *interlockedInfo {
 	if h.chdr == nil {
 		throw("sync.Interlocked invoked on a non-concurrent map!")
 	}
 
-	return cmapaccess1(t, h, key)
+	info := (*interlockedInfo)(newobject(t.interlockedinfo))
+	cmap := (*concurrentMap)(h.chdr)
+	arr := &cmap.root
+	var hash, idx, spins uintptr
+	var backoff int64
+	var hdr *bucketHdr
+	g := getg()
+	gptr := uintptr(unsafe.Pointer(g))
+
+	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
+next:
+	// Obtain the hash, index, and bucketHdr.
+	hash = t.key.alg.hash(key, uintptr(arr.seed))
+	idx = hash % uintptr(len(arr.buckets))
+	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+
+	// If hdr is nil, then no bucketData has been created yet. Do a wait-free creation of bucketData;
+	for hdr == nil {
+		// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
+		newHdr := (*bucketHdr)(newobject(t.bucketdata))
+		// Since we're setting it, may as well attempt to acquire lock
+		newHdr.lock = gptr
+		// If we fail, then some other Goroutine has already placed theirs.
+		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
+			// If we succeed, then we own this bucket and need to keep track of it
+			info.hdr = newHdr
+			// Also increment count of buckets
+			atomic.Xadduintptr(&arr.count, 1)
+		}
+		// Reload hdr
+		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+	}
+
+	// Attempt to acquire lock
+	for {
+		// Reset backoff variables
+		spins = 0
+		backoff = DEFAULT_BACKOFF
+
+		// Testing lock
+		lock := atomic.Loaduintptr(&hdr.lock)
+
+		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
+		if lock == INVALID {
+			// Reload hdr, since what it was pointed to has changed
+			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+			// If the hdr was deleted, then attempt to create a new one and try again
+			if hdr == nil {
+				// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
+				newHdr := (*bucketHdr)(newobject(t.bucketdata))
+				// Since we're setting it, may as well attempt to acquire lock
+				newHdr.lock = gptr
+				// If we fail, then some other Goroutine has already placed theirs.
+				if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
+					// If we succeed, then we own this bucket and need to keep track of it
+					info.hdr = newHdr
+					// Also increment count of buckets
+					atomic.Xadduintptr(&arr.count, 1)
+				}
+				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+			}
+			// Loop again.
+			continue
+		}
+
+		// If it's recursive, try again on new bucket
+		if lock == ARRAY {
+			arr = (*bucketArray)(unsafe.Pointer(hdr))
+			goto next
+		}
+
+		// If we hold the lock
+		if lock == gptr {
+			break
+		}
+
+		// If the lock is uncontested
+		if lock == UNLOCKED {
+			// Attempt to acquire
+			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
+				info.hdr = hdr
+				break
+			}
+			continue
+		}
+
+		// Keep track of the current lock-holder
+		holder := lock & LOCKED_MASK
+
+		// Tight-spin until the current lock-holder releases lock
+		for {
+			if spins > SLEEP_AFTER_SPINS {
+				timeSleep(backoff)
+
+				// ≈33ms
+				if backoff < MAX_BACKOFF {
+					backoff *= 2
+				}
+			} else if spins > GOSCHED_AFTER_SPINS {
+				Gosched()
+			}
+			spins++
+
+			// We test the lock on each iteration
+			lock = atomic.Loaduintptr(&hdr.lock)
+			// If the previous lock-holder released the lock, attempt to acquire again.
+			if lock != holder {
+				if spins > 20 {
+					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+				}
+				break
+			}
+		}
+	}
+
+	info.hdr = hdr
+	info.hdrPtr = &arr.buckets[idx]
+	info.parentHdr = (*bucketHdr)(unsafe.Pointer(arr))
+
+	data := (*bucketData)(unsafe.Pointer(hdr))
+	firstEmpty := -1
+
+	// Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
+	for i, count := 0, hdr.count; i < MAX_SLOTS && count > 0; i++ {
+		currHash := data.hash[i]
+		if currHash == EMPTY {
+			// Keep track of the first empty so we know what to assign into if we do not find a match
+			if firstEmpty == -1 {
+				firstEmpty = i
+			}
+			continue
+		}
+		count--
+
+		// If the hash matches, check to see if keys are equal
+		if hash == data.hash[i] {
+			otherKey := data.key(t, uintptr(i))
+
+			// If they are equal, update...
+			if t.key.alg.equal(key, otherKey) {
+				info.key = data.key(t, uintptr(i))
+				info.value = data.value(t, uintptr(i))
+				info.hash = &data.hash[i]
+
+				return info
+			}
+		}
+	}
+
+	// At this point, if firstEmpty == -1, then we exceeded the count without first finding one empty.
+	// Hence, the first empty is going to be at idx hdr.count because there is none empty before it.
+	// TODO: Clarification
+	if firstEmpty == -1 {
+		firstEmpty = int(hdr.count)
+	}
+	// TODO: What if t.indirectvalue is true? Correct this!
+	// At this point, firstEmpty is guaranteed to be non-zero and within bounds, hence we can safely assign to it
+	data.assign(t, uintptr(firstEmpty), hash, key, unsafe.Pointer(&DUMMY_RETVAL[0]))
+	info.key = data.key(t, uintptr(firstEmpty))
+	info.value = data.value(t, uintptr(firstEmpty))
+	info.hash = &data.hash[uintptr(firstEmpty)]
+	// Since we just assigned to a new empty slot, we need to increment count
+	atomic.Xadduintptr(&hdr.count, 1)
+	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
+
+	// Trial run
+	return info
 }
 
 /*
@@ -1388,7 +1555,7 @@ next:
 /*
 	Interlocked version of mapaccess do a fast key comparison, and then return the value associated with it.
 */
-func cmapaccess_interlocked(t *maptype, h *hmap, info *interlockedInfo, key unsafe.Pointer) unsafe.Pointer {
+func cmapaccess_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	// Do not allow accesses with keys not currently owned.
 	if !t.key.alg.equal(info.key, key) {
 		throw("Key indexed must be same as interlocked key!")

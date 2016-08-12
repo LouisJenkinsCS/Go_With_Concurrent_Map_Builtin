@@ -709,6 +709,10 @@ func typefmt(t *Type, flag FmtFlag) string {
 				return "map.buckethdr[" + m.Key().String() + "]" + m.Val().String()
 			}
 
+			if mt.InterlockedInfo == t {
+				return "map.interlockedinfo[" + m.Key().String() + "]" + m.Val().String()
+			}
+
 			if mt.ConcurrentIterator == t {
 				return "map.citer[" + m.Key().String() + "]" + m.Val().String()
 			}

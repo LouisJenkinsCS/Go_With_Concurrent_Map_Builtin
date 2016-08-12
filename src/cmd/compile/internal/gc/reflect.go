@@ -272,6 +272,31 @@ func concurrentIterator(t *Type) *Type {
 	return citer
 }
 
+func interlockedInfo(t *Type) *Type {
+	if t.MapType().InterlockedInfo != nil {
+		return t.MapType().InterlockedInfo
+	}
+
+	info := typ(TSTRUCT)
+	info.Noalg = true
+
+	var field [7]*Field
+	field[0] = makefield("hdr", Ptrto(bucketHdr(t)))
+	field[1] = makefield("hdrPtr", Ptrto(Ptrto(bucketHdr(t))))
+	field[2] = makefield("parentHdr", Ptrto(bucketHdr(t)))
+	field[3] = makefield("key", Types[TUNSAFEPTR])
+	field[4] = makefield("value", Types[TUNSAFEPTR])
+	field[5] = makefield("hash", Ptrto(Types[TUINTPTR]))
+	field[6] = makefield("flags", Types[TUINTPTR])
+
+	info.SetFields(field[:])
+	dowidth(info)
+	info.Local = t.Local
+	t.MapType().InterlockedInfo = info
+	info.StructType().Map = t
+	return info
+}
+
 func bucketData(t *Type) *Type {
 	if t.MapType().BucketData != nil {
 		return t.MapType().BucketData
@@ -1412,6 +1437,7 @@ ok:
 		s7 := dtypesym(bucketHdr(t))
 		s8 := dtypesym(bucketData(t))
 		s9 := dtypesym(concurrentIterator(t))
+		s10 := dtypesym(interlockedInfo(t))
 
 		ot = dcommontype(s, ot, t)
 		ot = dsymptr(s, ot, s1, 0)
@@ -1444,6 +1470,7 @@ ok:
 		ot = dsymptr(s, ot, s7, 0)
 		ot = dsymptr(s, ot, s8, 0)
 		ot = dsymptr(s, ot, s9, 0)
+		ot = dsymptr(s, ot, s10, 0)
 
 		ot = dextratype(s, ot, t, 0)
 

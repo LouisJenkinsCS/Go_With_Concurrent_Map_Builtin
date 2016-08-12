@@ -11,6 +11,23 @@ import (
 	"strings"
 )
 
+/*
+	L.J:
+		The sync.Interlocked specific node which is used to determine the appropriate map and key is being interlocked
+*/
+type interlockedNode struct {
+	// The map that is currently interlocked
+	map_ *Node
+	// The pointer to the runtime.interlockedInfo we are passing to map functions
+	info *Node
+}
+
+/*
+	L.J:
+		TODO: Document
+*/
+var interlockedStack []*interlockedNode
+
 // The constant is known to runtime.
 const (
 	tmpstringbufsize = 32
@@ -18,6 +35,7 @@ const (
 
 // We should release immediately following statement
 const immediateRelease = 1 << 0
+
 // State of whether or not we should append an automatic release
 var releaseFlags int
 
@@ -292,7 +310,7 @@ func walkstmt(n *Node) *Node {
 		n.Left = walkexpr(n.Left, &n.Ninit)
 		walkstmtlist(n.Nbody.Slice())
 		walkstmtlist(n.Rlist.Slice())
-	
+
 	case OINTERLOCKED:
 		n.Left = walkexpr(n.Left, &n.Ninit)
 		walkexprlist(n.List.Slice(), &n.Ninit)
@@ -302,7 +320,7 @@ func walkstmt(n *Node) *Node {
 		map_ = walkexpr(map_, &n.Ninit)
 		key = walkexpr(key, &n.Ninit)
 		t := map_.Type
-		
+
 		var newBody []*Node
 		tmpKey := temp(t.MapType().Key)
 		tmpAddr := Nod(OADDR, tmpKey, nil)
@@ -310,8 +328,9 @@ func walkstmt(n *Node) *Node {
 		tmpAddr = typecheck(tmpAddr, Erv)
 
 		fn := syslook("mapacquire")
-		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key(), t.Val())
-		fn = mkcall1(fn, nil, &n.Ninit, typename(t), map_, tmpAddr)
+		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key(), interlockedInfo(t))
+		fn = mkcall1(fn, Ptrto(interlockedInfo(t)), &n.Ninit, typename(t), map_, tmpAddr)
+		interlockedStack = append(interlockedStack, &interlockedNode{map_, fn})
 		newBody = append(newBody, n.Nbody.Slice()...)
 		newBody = append(newBody, mkcall1(syslook("maprelease"), nil, &n.Ninit))
 		n.Nbody.Set(newBody)
@@ -834,6 +853,7 @@ opswitch:
 			n = applywritebarrier(n)
 		}
 
+		// map[key] = value; Release
 		if releaseFlags == immediateRelease {
 			releaseFlags = 0
 			rFn := concurrentMapRelease(init)
@@ -964,7 +984,6 @@ opswitch:
 		rFn = walkexpr(rFn, init)
 		n = rFn
 
-
 	case ODELETE:
 		init.AppendNodes(&n.Ninit)
 		map_ := n.List.First()
@@ -981,7 +1000,6 @@ opswitch:
 		rFn.Ninit.Append(n)
 		rFn = walkexpr(rFn, init)
 		n = rFn
-	
 
 	case OAS2DOTTYPE:
 		e := n.Rlist.First() // i.(T)
@@ -1301,13 +1319,39 @@ opswitch:
 			p = "mapaccess1"
 		}
 
-		if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
-			n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key)
+		// Mapaccess inside of sync.Interlocked uses cached version
+		if len(interlockedStack) > 0 {
+			found := false
+			for _, info := range interlockedStack {
+				// If the map symbols are the same.
+				if info.map_.Name.Defn == n.Left.Name.Defn {
+					fmt.Println("Matching sync.Interlocked map sym!")
+					fn := syslook("cmapaccess_interlocked")
+					fn = substArgTypes(fn, interlockedInfo(t), t.Key(), t.Val(), t.Key(), t.Val())
+					n = mkcall1(fn, Ptrto(t.Val()), init, typename(t), info.info, n.Left, key)
+					found = true
+					break
+				}
+			}
+			if !found {
+				if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
+					n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key)
+				} else {
+					p = "mapaccess1_fat"
+					z := zeroaddr(w)
+					n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key, z)
+				}
+			}
 		} else {
-			p = "mapaccess1_fat"
-			z := zeroaddr(w)
-			n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key, z)
+			if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
+				n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key)
+			} else {
+				p = "mapaccess1_fat"
+				z := zeroaddr(w)
+				n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key, z)
+			}
 		}
+
 		n.NonNil = true // mapaccess always returns a non-nil pointer
 		n = Nod(OIND, n, nil)
 		n.Type = t.Val()

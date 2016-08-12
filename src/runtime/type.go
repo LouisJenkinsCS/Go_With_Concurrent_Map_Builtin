@@ -354,11 +354,12 @@ type maptype struct {
 	needkeyupdate bool   // true if we need to update key on an overwrite
 
 	// L.J: Concurrent Map
-	concurrentmap *_type
-	bucketarray *_type
-	buckethdr *_type
-	bucketdata *_type
+	concurrentmap      *_type
+	bucketarray        *_type
+	buckethdr          *_type
+	bucketdata         *_type
 	concurrentiterator *_type
+	interlockedinfo    *_type
 }
 
 type arraytype struct {

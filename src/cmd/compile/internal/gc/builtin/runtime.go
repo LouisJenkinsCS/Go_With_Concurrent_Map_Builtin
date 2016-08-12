@@ -106,7 +106,8 @@ func cmapiterinit(mapType *byte, hmap map[any]any, hiter *any)
 func cmapiterinit_interlocked(mapType *byte, hmap map[any]any, hiter *any)
 func cmapiternext(hiter *any)
 func cmapiternext_interlocked(hiter *any)
-
+// L.J: Concurrent map interlocked functions
+func cmapaccess_interlocked(mapType *byte, info *any, hmap map[any]any, key *any) *any
 
 // *byte is really *runtime.Type
 func makechan(chanType *byte, hint int64) (hchan chan any)

@@ -388,11 +388,12 @@ type mapType struct {
 	needkeyupdate bool   // true if we need to update key on an overwrite
 
 	// L.J: Concurrent Map
-	concurrentmap *rtype
-	bucketarray *rtype
-	buckethdr *rtype
-	bucketdata *rtype
+	concurrentmap      *rtype
+	bucketarray        *rtype
+	buckethdr          *rtype
+	bucketdata         *rtype
 	concurrentiterator *rtype
+	interlockedinfo    *rtype
 }
 
 // ptrType represents a pointer type.

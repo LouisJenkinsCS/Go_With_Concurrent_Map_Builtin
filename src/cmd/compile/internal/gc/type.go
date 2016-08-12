@@ -169,11 +169,13 @@ type MapType struct {
 	Hmap   *Type // internal struct type representing the Hmap (map header object)
 	Hiter  *Type // internal struct type representing hash iterator state
 
-	ConcurrentMap *Type // internal struct type representing a concurrent map (optional)
-	BucketArray *Type // internal struct type representing a concurrent map bucketArray (optional)
-	BucketHdr *Type // internal struct type representing a concurrent map bucketHdr (optional)
-	BucketData *Type // internal struct type representing a concurrnet map bucketData (optional)
+	ConcurrentMap      *Type // internal struct type representing a concurrent map (optional)
+	BucketArray        *Type // internal struct type representing a concurrent map bucketArray (optional)
+	BucketHdr          *Type // internal struct type representing a concurrent map bucketHdr (optional)
+	BucketData         *Type // internal struct type representing a concurrnet map bucketData (optional)
 	ConcurrentIterator *Type // internal struct type representing a concurrent map iterator (optional)
+	InterlockedInfo    *Type // internal struct type representing a interlocked info (optional)
+
 	isConcurrent uintptr // Whether or not it is a concurrent map; Pointer aligned
 }
 
