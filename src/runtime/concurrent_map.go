@@ -146,6 +146,7 @@ const (
 	// Maximum backoff; 33 milliseconds
 	MAX_BACKOFF = 33000000
 
+	// Signifies the key at the corresponding offset has been deleted and should be zero'd after the interlocked block
 	KEY_DELETED = uintptr(1 << 0)
 
 	// See hashmap.go, this obtains a properly aligned offset to the data
@@ -246,8 +247,10 @@ type concurrentIterator struct {
 	arr *bucketArray
 	// For the interlocked iterator, keeps track of randomized root we started at (and will wrap to)
 	rootStartIdx uintptr
-	// Cached 'g' for faster access; if interlocked iteration, data is the bucketHdr held.
+	// Cached 'g' for faster access
 	g *g
+	// For interlocked iteration, the information needed for fast access to key-value
+	info *interlockedInfo
 	// Snapshot if snapshot iteration used
 	data bucketData
 }
@@ -410,6 +413,9 @@ func cmapiterinit_interlocked(t *maptype, h *hmap, it *hiter) {
 	// Randomized root start index is a random prime, modulo the number of root buckets
 	citer.rootStartIdx = uintptr(primes[fastrand1()%uint32(len(primes))] % DEFAULT_BUCKETS)
 	citer.idx = uint32((citer.rootStartIdx + 1) % DEFAULT_BUCKETS)
+
+	// Create the storage for interlocked iteration information
+	citer.info = (*interlockedInfo)(newobject(t.interlockedinfo))
 
 	cmapiternext_interlocked(it)
 }
@@ -592,13 +598,21 @@ findKeyValue:
 	offset := uintptr(citer.offset)
 	citer.offset++
 
-	// Note that if g.releaseBucket == nil, this will crash... not sure why I even have it like this truth be told.
-	if g.releaseBucket != nil {
-		data = (*bucketData)(g.releaseBucket)
+	// Grab the data we are currently on; During initialization, data will be nil, so skip to next.
+	data = (*bucketData)(unsafe.Pointer(citer.info.hdr))
+	if data == nil {
+		citer.offset = 0
+		goto next
 	}
 
 	// If there is more to find, do so
 	if offset < MAX_SLOTS {
+		// Ensure we do not skip the first KEY_DELETED bit
+		if offset > 0 {
+			// Shift over by one bit so KEY_DELETED bit is unique to each index.
+			citer.info.flags = citer.info.flags << 1
+		}
+
 		// If this cell is empty, loop again
 		if data.hash[offset] == EMPTY {
 			goto findKeyValue
@@ -617,14 +631,56 @@ findKeyValue:
 		// Set the iterator's data and we're done
 		it.key = key
 		it.value = value
+
+		citer.info.key = key
+		citer.info.value = value
+		citer.info.hash = &data.hash[offset]
 		return
 	}
 
 	// If the offset == MAX_SLOTS, then we exhausted this bucketData, reset offset for next one
 	citer.offset = 0
 
-	// Since for interlocked iteration, we hold on to the lock until we no longer have more to iterate over, we must release it before acquiring a new one
-	maprelease()
+	// Since we maintain information used during interlocked iteration, its our job to also clean that up.
+	// When we delete an element during iteration, it's key and hash are not zero'd/cleared to allow the user to
+	// reassign to them later. Since we need to keep track of which keys are deleted, we encode them into the flags
+	// field and using it as a bitmap.
+
+	// If flags == 0, then none of the KEY_DELETED bits are set, so we can easily just proceed.
+	if citer.info.flags != 0 {
+		// Check each bit
+		for bit, idx := uintptr(1), MAX_SLOTS-1; bit < bit<<MAX_SLOTS; bit = bit << 1 {
+			// If the bit is set, the key and hash need to be zero'd.
+			if (citer.info.flags & bit) != 0 {
+				memclr(unsafe.Pointer(data.key(t, uintptr(idx))), uintptr(t.keysize))
+				data.hash[idx] = EMPTY
+			}
+			idx--
+		}
+
+		// Clear the info flags
+		citer.info.flags = 0
+	}
+
+	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
+	if data.count == 0 {
+		// Invalidate and release the bucket (as it is being deleted)
+		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(citer.info.hdrPtr)), nil)
+		atomic.Storeuintptr(&data.lock, INVALID)
+
+		// Also decrement number of buckets
+		atomic.Xadduintptr(&citer.info.parentHdr.count, ^uintptr(0))
+	} else {
+		// Otherwise, just release the lock on the bucket
+		atomic.Storeuintptr(&data.lock, UNLOCKED)
+	}
+
+	citer.info.hdr = nil
+	citer.info.hdrPtr = nil
+	citer.info.key = nil
+	citer.info.value = nil
+	citer.info.hash = nil
+	citer.info.parentHdr = nil
 
 	// Find the next bucketData if there is one
 next:
@@ -632,6 +688,14 @@ next:
 	if citer.arr.backLink == nil {
 		// If we wrapped around, we are done
 		if uintptr(citer.idx) == citer.rootStartIdx {
+			// Zero the interlocked info first
+			citer.info.hdr = nil
+			citer.info.hdrPtr = nil
+			citer.info.key = nil
+			citer.info.value = nil
+			citer.info.hash = nil
+			citer.info.parentHdr = nil
+
 			it.key = nil
 			it.value = nil
 			return
@@ -692,7 +756,6 @@ next:
 		if lock == UNLOCKED {
 			// Attempt to acquire
 			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				g.releaseBucket = unsafe.Pointer(hdr)
 				break
 			}
 			continue
@@ -700,7 +763,6 @@ next:
 
 		// If we already own the lock, then we're iterating while in a sync.Interlocked block, which is forbidden (Don't know how we got here then)
 		if lock == gptr {
-			g.releaseBucket = unsafe.Pointer(hdr)
 			println("...g # ", g.goid, ": Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
 			break
 		}
@@ -733,7 +795,10 @@ next:
 			}
 		}
 	}
-	g.releaseDepth++
+
+	citer.info.hdr = hdr
+	citer.info.hdrPtr = &citer.arr.buckets[citer.idx-1]
+	citer.info.parentHdr = (*bucketHdr)(unsafe.Pointer(citer.arr))
 
 	// We have the data we are looking for.
 	goto findKeyValue
@@ -1070,6 +1135,7 @@ func cmapaccess2_faststr(t *maptype, h *hmap, key string) (unsafe.Pointer, bool)
 */
 func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) (unsafe.Pointer, bool) {
 	// println("...g #", getg().goid, ": Searching for Key: ", toKeyType(key).x, "," ,  toKeyType(key).y)
+	// println("...g #", getg().goid, ": Inside cmapaccess")
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
 	var hash, idx, spins uintptr
@@ -1207,7 +1273,7 @@ func cmapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool)
 
 func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	// g := getg().m.curg
-	// println("g #", getg().goid, ": cmapaccess1")
+	println("g #", getg().goid, ": cmapaccess1")
 	retval, _ := cmapaccess2(t, h, key)
 
 	// Only difference is that we discard the boolean
@@ -1346,6 +1412,8 @@ next:
 	data := (*bucketData)(unsafe.Pointer(hdr))
 	firstEmpty := -1
 
+	// If we do not find the requested key to interlock, we must create a new key for the user... same song and dance
+	// as cmapassign....
 	// Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
 	for i, count := 0, hdr.count; i < MAX_SLOTS && count > 0; i++ {
 		currHash := data.hash[i]
@@ -1373,6 +1441,68 @@ next:
 		}
 	}
 
+	// If firstEmpty is still -1 and the bucket is full, that means we did not find any empty slots, and should convert immediate
+	if firstEmpty == -1 && hdr.count == MAX_SLOTS {
+		// println("g #", getg().goid, ": Resizing...")
+		// Allocate and initialize
+		newArr := (*bucketArray)(newobject(t.bucketarray))
+		newArr.lock = ARRAY
+		newArr.buckets = make([]*bucketHdr, len(arr.buckets)*2)
+		newArr.seed = fastrand1()
+		newArr.backLink = arr
+		newArr.backIdx = uint32(idx)
+
+		// Rehash and move all key-value pairs
+		for i := 0; i < MAX_SLOTS; i++ {
+			k := data.key(t, uintptr(i))
+			v := data.value(t, uintptr(i))
+
+			// Rehash the key to the new seed
+			newHash := t.key.alg.hash(k, uintptr(newArr.seed))
+			newIdx := newHash % uintptr(len(newArr.buckets))
+			newHdr := newArr.buckets[newIdx]
+			newData := (*bucketData)(unsafe.Pointer(newHdr))
+
+			// Check if the bucket is nil, meaning we haven't allocated to it yet.
+			if newData == nil {
+				newArr.buckets[newIdx] = (*bucketHdr)(newobject(t.bucketdata))
+				newArr.count++
+
+				newData = (*bucketData)(unsafe.Pointer(newArr.buckets[newIdx]))
+				newData.assign(t, 0, newHash, k, v)
+				newData.count++
+
+				continue
+			}
+
+			// If it is not nil, then we must scan for the first non-empty slot
+			for j := 0; j < MAX_SLOTS; j++ {
+				currHash := newData.hash[j]
+				if currHash == EMPTY {
+					newData.assign(t, uintptr(j), newHash, k, v)
+					newData.count++
+					break
+				}
+			}
+		}
+
+		// Now dispose of old data and update the header's bucket; We have to be careful to NOT overwrite the header portion
+		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(sys.PtrSize)+uintptr(t.keysize)+uintptr(t.valuesize)))
+		// Update and then invalidate to point to nested ARRAY
+		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
+		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
+		atomic.Storeuintptr(&hdr.lock, INVALID)
+
+		// Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for our current key-value.
+		// In this case try again, to reduce contention and increase concurrency over the lock
+		arr = newArr
+		info.hdr = nil
+		info.hdrPtr = nil
+		info.parentHdr = nil
+
+		goto next
+	}
+
 	// At this point, if firstEmpty == -1, then we exceeded the count without first finding one empty.
 	// Hence, the first empty is going to be at idx hdr.count because there is none empty before it.
 	// TODO: Clarification
@@ -1389,7 +1519,6 @@ next:
 	atomic.Xadduintptr(&hdr.count, 1)
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 
-	// Trial run
 	return info
 }
 
@@ -1555,25 +1684,102 @@ next:
 /*
 	Interlocked version of mapaccess do a fast key comparison, and then return the value associated with it.
 */
-func cmapaccess_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsafe.Pointer) unsafe.Pointer {
+func cmapaccess_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) (unsafe.Pointer, bool) {
+	// println("g #", getg().goid, ": cmapaccess_interlocked")
 	// Do not allow accesses with keys not currently owned.
-	if !t.key.alg.equal(info.key, key) {
+	if !equal(info.key, key) {
 		throw("Key indexed must be same as interlocked key!")
+	}
+
+	// If we do not hold the lock we messed up...
+	if info.hdr.lock != uintptr(unsafe.Pointer(getg())) {
+		throw("Interlocked function, but hdr owned is not ours!")
 	}
 
 	// If the key had been 'deleted', return the zero'd portion
 	if (info.flags & KEY_DELETED) != 0 {
-		return unsafe.Pointer(&DUMMY_RETVAL[0])
+		return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 	}
 
 	// Otherwise return the value directly
-	return info.value
+	return info.value, true
+}
+
+func cmapaccess2_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess2!")
+
+	return cmapaccess_interlocked(t, info, h, key, t.key.alg.equal)
+}
+
+func cmapaccess1_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsafe.Pointer) unsafe.Pointer {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess1")
+	retval, _ := cmapaccess2_interlocked(t, info, h, key)
+
+	// Only difference is that we discard the boolean
+	return retval
+}
+
+/*
+   Concurrent Interlocked hashmap_fast.go function implementations
+*/
+func cmapaccess1_fast32_interlocked(t *maptype, info *interlockedInfo, h *hmap, key uint32) unsafe.Pointer {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess1_fast32!")
+	retval, _ := cmapaccess2_fast32_interlocked(t, info, h, key)
+	return retval
+}
+
+func cmapaccess2_fast32_interlocked(t *maptype, info *interlockedInfo, h *hmap, key uint32) (unsafe.Pointer, bool) {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess2_fast32!")
+	return cmapaccess_interlocked(t, info, h, noescape(unsafe.Pointer(&key)),
+		func(k1, k2 unsafe.Pointer) bool {
+			return *(*uint32)(k1) == *(*uint32)(k2)
+		})
+}
+
+func cmapaccess1_fast64_interlocked(t *maptype, info *interlockedInfo, h *hmap, key uint64) unsafe.Pointer {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess1_fast64")
+	retval, _ := cmapaccess2_fast64_interlocked(t, info, h, key)
+	return retval
+}
+
+func cmapaccess2_fast64_interlocked(t *maptype, info *interlockedInfo, h *hmap, key uint64) (unsafe.Pointer, bool) {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess2_fast64!")
+	return cmapaccess_interlocked(t, info, h, noescape(unsafe.Pointer(&key)),
+		func(k1, k2 unsafe.Pointer) bool {
+			return *(*uint64)(k1) == *(*uint64)(k2)
+		})
+}
+
+func cmapaccess1_faststr_interlocked(t *maptype, info *interlockedInfo, h *hmap, key string) unsafe.Pointer {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess1_faststr")
+	retval, _ := cmapaccess2_faststr_interlocked(t, info, h, key)
+	return retval
+}
+
+func cmapaccess2_faststr_interlocked(t *maptype, info *interlockedInfo, h *hmap, key string) (unsafe.Pointer, bool) {
+	// g := getg().m.curg
+	// println("g #", getg().goid, ": cmapaccess2_faststr")
+	return cmapaccess_interlocked(t, info, h, noescape(unsafe.Pointer(&key)),
+		func(k1, k2 unsafe.Pointer) bool {
+			sk1 := (*stringStruct)(k1)
+			sk2 := (*stringStruct)(k2)
+			return sk1.len == sk2.len &&
+				(sk1.str == sk2.str || memequal(sk1.str, sk2.str, uintptr(sk1.len)))
+		})
 }
 
 /*
 	Interlocked version of mapassign does a fast key comparison, and then writes to the value itself
 */
-func cmapassign_interlocked(t *maptype, h *hmap, info *interlockedInfo, key, value unsafe.Pointer) {
+func cmapassign_interlocked(t *maptype, info *interlockedInfo, h *hmap, key, value unsafe.Pointer) {
+	// println("g #", getg().goid, ": cmapassign_interlocked")
 	k := info.key
 	v := info.value
 
@@ -1585,6 +1791,11 @@ func cmapassign_interlocked(t *maptype, h *hmap, info *interlockedInfo, key, val
 	// Do not allow accesses with keys not currently owned.
 	if !t.key.alg.equal(k, key) {
 		throw("Key indexed must be same as interlocked key!")
+	}
+
+	// If we do not hold the lock we messed up...
+	if info.hdr.lock != uintptr(unsafe.Pointer(getg())) {
+		throw("Interlocked function, but hdr owned is not ours!")
 	}
 
 	// Since we will be doing a memcpy regardless of if it is present or not, unset the KEY_DELETED bit, but keep track of old value
@@ -1622,10 +1833,16 @@ func cmapassign_interlocked(t *maptype, h *hmap, info *interlockedInfo, key, val
 	}
 }
 
-func cmapdelete_interlocked(t *maptype, h *hmap, info *interlockedInfo, key unsafe.Pointer) {
+func cmapdelete_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsafe.Pointer) {
+	// println("g #", getg().goid, ": cmapdelete_interlocked")
 	// Do not allow accesses with keys not currently owned.
 	if !t.key.alg.equal(info.key, key) {
 		throw("Key indexed must be same as interlocked key!")
+	}
+
+	// If we do not hold the lock we messed up...
+	if info.hdr.lock != uintptr(unsafe.Pointer(getg())) {
+		throw("Interlocked function, but hdr owned is not ours!")
 	}
 
 	// If the key had already been 'deleted' we're done.
@@ -1634,13 +1851,13 @@ func cmapdelete_interlocked(t *maptype, h *hmap, info *interlockedInfo, key unsa
 	}
 
 	// Update flags and zero value
-	info.flags &= KEY_DELETED
+	info.flags |= KEY_DELETED
 	memclr(info.value, uintptr(t.valuesize))
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), -1)
 	atomic.Xadduintptr(&info.hdr.count, ^uintptr(0))
 }
 
-func maprelease_interlocked(t *maptype, h *hmap, info *interlockedInfo) {
+func maprelease_interlocked(t *maptype, info *interlockedInfo, h *hmap) {
 	// Handle cases where the current key has been marked for deletion. At this point, the corresponding value has already been zero'd.
 	// Note, for iteration it must handle deleting its own keys after each successful iteration.
 	if (info.flags & KEY_DELETED) != 0 {
@@ -1660,4 +1877,8 @@ func maprelease_interlocked(t *maptype, h *hmap, info *interlockedInfo) {
 		// Otherwise, just release the lock on the bucket
 		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
 	}
+}
+
+func cmapiterinfo(it *hiter) *interlockedInfo {
+	return (*concurrentIterator)(it.citerHdr).info
 }

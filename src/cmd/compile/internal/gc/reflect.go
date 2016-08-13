@@ -254,13 +254,14 @@ func concurrentIterator(t *Type) *Type {
 		return t.MapType().ConcurrentIterator
 	}
 
-	var field [6]*Field
+	var field [7]*Field
 	field[0] = makefield("idx", Types[TUINT32])
 	field[1] = makefield("offset", Types[TUINT32])
 	field[2] = makefield("arr", Types[TUNSAFEPTR])
 	field[3] = makefield("rootStartIdx", Types[TUINTPTR])
 	field[4] = makefield("g", Types[TUNSAFEPTR])
-	field[5] = makefield("data", bucketData(t))
+	field[5] = makefield("info", Ptrto(interlockedInfo(t)))
+	field[6] = makefield("data", bucketData(t))
 
 	citer := typ(TSTRUCT)
 	citer.Noalg = true

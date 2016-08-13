@@ -45,21 +45,67 @@ func populate_map(m map[point]point) {
 	}
 }
 
-type T struct {x, y int}
+type T struct {
+	_    [56]byte
+	iter uint64
+}
 
 func main() {
-	m := make(map[T]int, 0, 1)
-	n := make(map[T]int, 0, 1)
-	key := T{5, 3}
-	m[key] = 3
-	sync.Interlocked m[key] {
-		x := m[key]
-		y := n[key]
-		x++
-		y++
-		fmt.Println(m[key])
+	m := make(map[int]T, 0, 1)
+	for i := 0; i < 1000000; i++ {
+		m[i] = T{}
 	}
-	
+
+	fmt.Println("Finished adding elements...")
+
+	var start, wg sync.WaitGroup
+	wg.Add(1000)
+	start.Add(1)
+
+	for i := 0; i < 1000; i++ {
+		go func() {
+			start.Wait()
+			for k, _ := range sync.Interlocked m {
+				sync.Interlocked m[k] {
+					t := m[k]
+					t.iter++
+					m[k] = t
+				}
+			}
+			wg.Done()
+		}()
+	}
+
+	checkMap := make(map[int]bool)
+	for i := 0; i < 1000; i++ {
+		checkMap[i] = false
+	}
+
+	start.Done()
+	wg.Wait()
+	fmt.Println("Finished processing elements...")
+	err := false
+	for k, _ := range m {
+		if checkMap[k] {
+			panic(fmt.Sprintf("Key %v already marked off!", k))
+		}
+		checkMap[k] = true
+		t := m[k]
+		if t.iter != 1000 {
+			err = true
+		}
+		delete(m, k)
+	}
+
+	for _, v := range checkMap {
+		if !v {
+			panic(fmt.Sprintf("CheckMap Not All True"))
+		}
+	}
+
+	fmt.Printf("Error: %v\n", err)
+
+
 	// if (rows * cols) > 1000000 {
 	// 	panic("Only a million elements may be added to the list to avoid resource exhaustion!")
 	// }

@@ -13,7 +13,7 @@ func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) 
 }
 
 func main() {
-	endEarly := true
+	endEarly := false
 	if endEarly {
 		combinedSkimFile, err := os.Create("combinedSkim.csv")
 		if err != nil {

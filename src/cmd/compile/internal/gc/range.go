@@ -158,9 +158,9 @@ func walkrange(n *Node) {
 	// to avoid erroneous processing by racewalk.
 	n.List.Set(nil)
 
-	if (n.flags & isInterlockedRange) != 0 && t.Etype != TMAP {
+	if (n.flags&isInterlockedRange) != 0 && t.Etype != TMAP {
 		Yyerror("Cannot use sync.Interlocked with non-map type")
-	} 
+	}
 
 	var body []*Node
 	var init []*Node
@@ -258,7 +258,7 @@ func walkrange(n *Node) {
 		} else {
 			fn = syslook("mapiternext")
 		}
-		
+
 		fn = substArgTypes(fn, th)
 		n.Right = mkcall1(fn, nil, nil, Nod(OADDR, hit, nil))
 
@@ -275,6 +275,16 @@ func walkrange(n *Node) {
 			a.List.Set([]*Node{v1, v2})
 			a.Rlist.Set([]*Node{key, val})
 			body = []*Node{a}
+		}
+
+		// To ensure that sync.Interlocked iteration uses the cached map functions, we need to obtain
+		// the iterator's interlockedInfo information and push it on the stack.
+		if ha.Type.IsCMap() && (n.flags&isInterlockedRange) != 0 {
+			cfn := syslook("cmapiterinfo")
+			cfn = substArgTypes(cfn, th, interlockedInfo(t))
+			cfn = mkcall1(cfn, Ptrto(interlockedInfo(t)), nil, Nod(OADDR, hit, nil))
+			interlockedStack = append(interlockedStack, &interlockedNode{ha.Name.Defn.Right, cfn})
+			body = append(body, cfn)
 		}
 
 	case TCHAN:
@@ -348,6 +358,11 @@ func walkrange(n *Node) {
 	typecheckslice(body, Etop)
 	n.Nbody.Set(append(body, n.Nbody.Slice()...))
 	n = walkstmt(n)
+
+	// Pop from stack.
+	if a.Type.IsCMap() && (n.flags&isInterlockedRange) != 0 {
+		interlockedStack = interlockedStack[:len(interlockedStack)-1]
+	}
 
 	lineno = lno
 }
