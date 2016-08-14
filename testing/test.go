@@ -52,7 +52,7 @@ type T struct {
 
 func main() {
 	m := make(map[int]T, 0, 1)
-	for i := 0; i < 1000000; i++ {
+	for i := 0; i < 1000; i++ {
 		m[i] = T{}
 	}
 
@@ -64,14 +64,16 @@ func main() {
 
 	for i := 0; i < 1000; i++ {
 		go func() {
+			iterations := 0
 			start.Wait()
-			for k, _ := range sync.Interlocked m {
-				sync.Interlocked m[k] {
-					t := m[k]
-					t.iter++
-					m[k] = t
-				}
+			for k, v := range sync.Interlocked m {
+				v.iter++
+				t := m[k]
+				t.iter = t.iter + 1 
+				m[k] = t
+				iterations++
 			}
+			fmt.Printf("Iterations: %v\n", iterations)
 			wg.Done()
 		}()
 	}
@@ -92,6 +94,7 @@ func main() {
 		checkMap[k] = true
 		t := m[k]
 		if t.iter != 1000 {
+			fmt.Printf("Key: %v;Expected: 1000; Received %v\n", k, t.iter)
 			err = true
 		}
 		delete(m, k)

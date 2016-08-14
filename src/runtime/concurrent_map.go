@@ -580,6 +580,9 @@ next:
 	goto findKeyValue
 }
 
+/*
+	Interlocked iteration
+*/
 func cmapiternext_interlocked(it *hiter) {
 	citer := (*concurrentIterator)(it.citerHdr)
 	var data *bucketData
@@ -591,9 +594,8 @@ func cmapiternext_interlocked(it *hiter) {
 	g := citer.g
 	gptr := uintptr(unsafe.Pointer(g))
 
-	// Find the next key-value element. It assumes that if citer.offset < MAX_SLOTS, that citer.data actually holds valid information.
-	// This is jumped to during iteration when we acquire a valid bucketHdr with the information we need, and assumes that g.releaseBucket
-	// holds the pointer to that bucketHdr.
+	// Find the next key-value element. It assumes that if citer.offset < MAX_SLOTS, that citer.info.hdr actually holds a valid header.
+	// This is jumped to during iteration when we acquire a valid bucketHdr containing any elements and need to iterate over that bucket.
 findKeyValue:
 	offset := uintptr(citer.offset)
 	citer.offset++
@@ -632,8 +634,8 @@ findKeyValue:
 		it.key = key
 		it.value = value
 
-		citer.info.key = key
-		citer.info.value = value
+		citer.info.key = data.key(t, offset)
+		citer.info.value = data.value(t, offset)
 		citer.info.hash = &data.hash[offset]
 		return
 	}
@@ -686,8 +688,8 @@ findKeyValue:
 next:
 	// If this is the root, we need to make sure we wrap to rootStartIdx
 	if citer.arr.backLink == nil {
-		// If we wrapped around, we are done
-		if uintptr(citer.idx) == citer.rootStartIdx {
+		// The 17th bit is a special bit we set once we've hit all buckets, including the one at rootStartIdx, meaning we are finished
+		if (citer.rootStartIdx & uintptr(1<<16)) != 0 {
 			// Zero the interlocked info first
 			citer.info.hdr = nil
 			citer.info.hdrPtr = nil
@@ -698,7 +700,12 @@ next:
 
 			it.key = nil
 			it.value = nil
+
 			return
+		}
+		// If we wrapped around, we are done, but we have to make sure we process this last bucket, so set the special 17th bit
+		if uintptr(citer.idx) == citer.rootStartIdx {
+			citer.rootStartIdx |= uintptr(1 << 16)
 		} else if citer.idx == uint32(len(citer.arr.buckets)) {
 			// Wrap around
 			citer.idx = 0
@@ -1430,7 +1437,7 @@ next:
 		if hash == data.hash[i] {
 			otherKey := data.key(t, uintptr(i))
 
-			// If they are equal, update...
+			// If they are equal, keep track of the respective key, value and hash.
 			if t.key.alg.equal(key, otherKey) {
 				info.key = data.key(t, uintptr(i))
 				info.value = data.value(t, uintptr(i))
@@ -1800,7 +1807,9 @@ func cmapassign_interlocked(t *maptype, info *interlockedInfo, h *hmap, key, val
 
 	// Since we will be doing a memcpy regardless of if it is present or not, unset the KEY_DELETED bit, but keep track of old value
 	present := (info.flags & KEY_DELETED) == 0
-	info.flags &= ^KEY_DELETED
+	if !present {
+		info.flags &= ^KEY_DELETED
+	}
 
 	// In the case that the key was present, we are updating, hence we need to check if we also need to update the key as well
 	if present {
