@@ -135,11 +135,17 @@ const (
 	// Hash value signifying that the hash is not in use.
 	EMPTY = 0
 
+	// The minimum number of CPU cycles we spin during the tight-spin waiting for the lock holder to change.
+	MIN_SPIN_CYCLES = 10
+	// The number of spin cycles we go up to
+	ADD_SPIN_CYCLES = 10
+	// The maximum number of CPU cycles we spin during the tight-spin.
+	MAX_SPIN_CYCLES = 50
 	// After this many spins, we yield (remember Goroutine context switching only requires a switch in SP/PC and DX register and is lightning fast)
-	GOSCHED_AFTER_SPINS = 1
+	GOSCHED_AFTER_SPINS = 5
 	// After this many spins, we backoff (time.Sleep unfortunately has us park on a semaphore, but if we spin this many times, it's not a huge deal...)
 	// Also as well, due to this, when deadlocks occur they are easier to identify since the CPU sinks to 0% rather than infinitely at 100%
-	SLEEP_AFTER_SPINS = 5
+	SLEEP_AFTER_SPINS = 10
 
 	// Default backoff; 1 microsecond
 	DEFAULT_BACKOFF = 1024
@@ -546,15 +552,22 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins > SLEEP_AFTER_SPINS {
+			if spins < GOSCHED_AFTER_SPINS {
+				cycles := uint32(MIN_SPIN_CYCLES + (spins * ADD_SPIN_CYCLES))
+				if cycles > MAX_SPIN_CYCLES {
+					cycles = MAX_SPIN_CYCLES
+				}
+
+				procyield(cycles)
+			} else if spins < SLEEP_AFTER_SPINS {
+				Gosched()
+			} else {
 				timeSleep(backoff)
 
 				// ≈33ms
 				if backoff < MAX_BACKOFF {
 					backoff *= 2
 				}
-			} else if spins > GOSCHED_AFTER_SPINS {
-				Gosched()
 			}
 			spins++
 
@@ -779,15 +792,22 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins > SLEEP_AFTER_SPINS {
+			if spins < GOSCHED_AFTER_SPINS {
+				cycles := uint32(MIN_SPIN_CYCLES + (spins * ADD_SPIN_CYCLES))
+				if cycles > MAX_SPIN_CYCLES {
+					cycles = MAX_SPIN_CYCLES
+				}
+
+				procyield(cycles)
+			} else if spins < SLEEP_AFTER_SPINS {
+				Gosched()
+			} else {
 				timeSleep(backoff)
 
 				// ≈33ms
 				if backoff < MAX_BACKOFF {
 					backoff *= 2
 				}
-			} else if spins > GOSCHED_AFTER_SPINS {
-				Gosched()
 			}
 			spins++
 
@@ -926,15 +946,22 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins > SLEEP_AFTER_SPINS {
+			if spins < GOSCHED_AFTER_SPINS {
+				cycles := uint32(MIN_SPIN_CYCLES + (spins * ADD_SPIN_CYCLES))
+				if cycles > MAX_SPIN_CYCLES {
+					cycles = MAX_SPIN_CYCLES
+				}
+
+				procyield(cycles)
+			} else if spins < SLEEP_AFTER_SPINS {
+				Gosched()
+			} else {
 				timeSleep(backoff)
 
 				// ≈33ms
 				if backoff < MAX_BACKOFF {
 					backoff *= 2
 				}
-			} else if spins > GOSCHED_AFTER_SPINS {
-				Gosched()
 			}
 			spins++
 
@@ -1213,15 +1240,22 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins > SLEEP_AFTER_SPINS {
+			if spins < GOSCHED_AFTER_SPINS {
+				cycles := uint32(MIN_SPIN_CYCLES + (spins * ADD_SPIN_CYCLES))
+				if cycles > MAX_SPIN_CYCLES {
+					cycles = MAX_SPIN_CYCLES
+				}
+
+				procyield(cycles)
+			} else if spins < SLEEP_AFTER_SPINS {
+				Gosched()
+			} else {
 				timeSleep(backoff)
 
 				// ≈33ms
 				if backoff < MAX_BACKOFF {
 					backoff *= 2
 				}
-			} else if spins > GOSCHED_AFTER_SPINS {
-				Gosched()
 			}
 			spins++
 
@@ -1388,15 +1422,22 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins > SLEEP_AFTER_SPINS {
+			if spins < GOSCHED_AFTER_SPINS {
+				cycles := uint32(MIN_SPIN_CYCLES + (spins * ADD_SPIN_CYCLES))
+				if cycles > MAX_SPIN_CYCLES {
+					cycles = MAX_SPIN_CYCLES
+				}
+
+				procyield(cycles)
+			} else if spins < SLEEP_AFTER_SPINS {
+				Gosched()
+			} else {
 				timeSleep(backoff)
 
 				// ≈33ms
 				if backoff < MAX_BACKOFF {
 					backoff *= 2
 				}
-			} else if spins > GOSCHED_AFTER_SPINS {
-				Gosched()
 			}
 			spins++
 
@@ -1606,15 +1647,22 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins > SLEEP_AFTER_SPINS {
+			if spins < GOSCHED_AFTER_SPINS {
+				cycles := uint32(MIN_SPIN_CYCLES + (spins * ADD_SPIN_CYCLES))
+				if cycles > MAX_SPIN_CYCLES {
+					cycles = MAX_SPIN_CYCLES
+				}
+
+				procyield(cycles)
+			} else if spins < SLEEP_AFTER_SPINS {
+				Gosched()
+			} else {
 				timeSleep(backoff)
 
 				// ≈33ms
 				if backoff < MAX_BACKOFF {
 					backoff *= 2
 				}
-			} else if spins > GOSCHED_AFTER_SPINS {
-				Gosched()
 			}
 			spins++
 
