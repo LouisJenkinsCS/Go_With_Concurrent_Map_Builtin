@@ -283,7 +283,7 @@ func walkrange(n *Node) {
 			cfn := syslook("cmapiterinfo")
 			cfn = substArgTypes(cfn, th, interlockedInfo(t))
 			cfn = mkcall1(cfn, Ptrto(interlockedInfo(t)), nil, Nod(OADDR, hit, nil))
-			init = append(init, cfn)
+			body = append(body, cfn)
 			interlockedStack = append(interlockedStack, &interlockedNode{ha.Name.Defn.Right, cfn})
 		}
 

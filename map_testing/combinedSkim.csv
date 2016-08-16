@@ -1,5 +1,3 @@
 Map-CombinedSkim,1,2,4,8,16,32
-ConcurrentMap,1.92,3.21,6.17,8.20,8.06,7.94
-ConcurrentMap-Interlocked,9.80,18.87,29.41,45.45,45.45,47.62
-SynchronizedMap,12.20,11.90,11.63,11.76,11.63,11.76
-ReaderWriterMap,12.35,11.76,11.49,11.76,11.90,11.90
+ConcurrentMap (Interlocked),9.01,16.67,27.78,43.48,43.48,43.48
+SynchronizedMap (Mutex),11.76,11.49,11.36,11.36

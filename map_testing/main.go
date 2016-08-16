@@ -13,7 +13,7 @@ func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) 
 }
 
 func main() {
-	endEarly := false
+	endEarly := true
 	if endEarly {
 		combinedSkimFile, err := os.Create("combinedSkim.csv")
 		if err != nil {
@@ -27,29 +27,29 @@ func main() {
 		}
 		combinedSkimFile.WriteString("\n")
 
-		// Concurrent Map
-		combinedSkimFile.WriteString(fmt.Sprintf("ConcurrentMap"))
-		for i := 1; i <= 32; i = i << 1 {
-			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombinedSkim)))
-		}
-		combinedSkimFile.WriteString("\n")
+		// // Concurrent Map
+		// combinedSkimFile.WriteString(fmt.Sprintf("ConcurrentMap"))
+		// for i := 1; i <= 32; i = i << 1 {
+		// 	combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombinedSkim)))
+		// }
+		// combinedSkimFile.WriteString("\n")
 
 		// Concurrent Map - Interlocked
-		combinedSkimFile.WriteString(fmt.Sprintf("ConcurrentMap-Interlocked"))
+		combinedSkimFile.WriteString(fmt.Sprintf("ConcurrentMap (Interlocked)"))
 		for i := 1; i <= 32; i = i << 1 {
 			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombinedSkim_Interlocked)))
 		}
 		combinedSkimFile.WriteString("\n")
 
 		// Synchronized Map
-		combinedSkimFile.WriteString(fmt.Sprintf("SynchronizedMap"))
+		combinedSkimFile.WriteString(fmt.Sprintf("SynchronizedMap (Mutex)"))
 		for i := 1; i <= 32; i = i << 1 {
 			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.SynchronizedCombinedSkim)))
 		}
 		combinedSkimFile.WriteString("\n")
 
 		// ReaderWriter Map
-		combinedSkimFile.WriteString(fmt.Sprintf("ReaderWriterMap"))
+		combinedSkimFile.WriteString(fmt.Sprintf("ReaderWriterMap (RWMutex)"))
 		for i := 1; i <= 32; i = i << 1 {
 			combinedSkimFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ReaderWriterCombinedSkim)))
 		}
@@ -92,14 +92,14 @@ func main() {
 	intsetFile.WriteString("\n")
 
 	// Synchronized Map
-	intsetFile.WriteString(fmt.Sprintf("SynchronizedMap"))
+	intsetFile.WriteString(fmt.Sprintf("SynchronizedMap (Mutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		intsetFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, intset_testing.SynchronizedIntset)))
 	}
 	intsetFile.WriteString("\n")
 
 	// ReaderWriterMap
-	intsetFile.WriteString(fmt.Sprintf("ReaderWriterMap"))
+	intsetFile.WriteString(fmt.Sprintf("ReaderWriterMap (RWMutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		intsetFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, intset_testing.ReaderWriterIntset)))
 	}
@@ -114,21 +114,21 @@ func main() {
 	iteratorROFile.WriteString("\n")
 
 	// Concurrent Map
-	iteratorROFile.WriteString(fmt.Sprintf("ConcurrentMap"))
-	for i := 1; i <= 32; i = i << 1 {
-		iteratorROFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ConcurrentIterator_RO)))
-	}
-	iteratorROFile.WriteString("\n")
+	// iteratorROFile.WriteString(fmt.Sprintf("ConcurrentMap"))
+	// for i := 1; i <= 32; i = i << 1 {
+	// 	iteratorROFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ConcurrentIterator_RO)))
+	// }
+	// iteratorROFile.WriteString("\n")
 
 	// Concurrent Map - Interlocked
-	iteratorROFile.WriteString(fmt.Sprintf("ConcurrentMap-Interlocked"))
+	iteratorROFile.WriteString(fmt.Sprintf("ConcurrentMap (Interlocked)"))
 	for i := 1; i <= 32; i = i << 1 {
 		iteratorROFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ConcurrentIterator_Interlocked_RO)))
 	}
 	iteratorROFile.WriteString("\n")
 
 	// Default Map
-	iteratorROFile.WriteString(fmt.Sprintf("DefaultMap"))
+	iteratorROFile.WriteString(fmt.Sprintf("DefaultMap (No Mutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		iteratorROFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.DefaultIterator_RO)))
 	}
@@ -143,28 +143,28 @@ func main() {
 	iteratorRWFile.WriteString("\n")
 
 	// Concurrent Map
-	iteratorRWFile.WriteString(fmt.Sprintf("ConcurrentMap"))
-	for i := 1; i <= 32; i = i << 1 {
-		iteratorRWFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ConcurrentIterator_RW)))
-	}
-	iteratorRWFile.WriteString("\n")
+	// iteratorRWFile.WriteString(fmt.Sprintf("ConcurrentMap"))
+	// for i := 1; i <= 32; i = i << 1 {
+	// 	iteratorRWFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ConcurrentIterator_RW)))
+	// }
+	// iteratorRWFile.WriteString("\n")
 
 	// Concurrent Map - Interlocked
-	iteratorRWFile.WriteString(fmt.Sprintf("ConcurrentMap-Interlocked"))
+	iteratorRWFile.WriteString(fmt.Sprintf("ConcurrentMap (Interlocked)"))
 	for i := 1; i <= 32; i = i << 1 {
 		iteratorRWFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ConcurrentIterator_Interlocked_RW)))
 	}
 	iteratorRWFile.WriteString("\n")
 
 	// Synchronized Map
-	iteratorRWFile.WriteString(fmt.Sprintf("SynchronizedMap"))
+	iteratorRWFile.WriteString(fmt.Sprintf("SynchronizedMap (Mutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		iteratorRWFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.SynchronizedIterator_RW)))
 	}
 	iteratorRWFile.WriteString("\n")
 
 	// ReaderWriter Map
-	iteratorRWFile.WriteString(fmt.Sprintf("ReaderWriterMap"))
+	iteratorRWFile.WriteString(fmt.Sprintf("ReaderWriterMap (RWMutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		iteratorRWFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, iterator_testing.ReaderWriterIterator_RW)))
 	}
@@ -179,28 +179,28 @@ func main() {
 	combinedFile.WriteString("\n")
 
 	// Concurrent Map
-	combinedFile.WriteString(fmt.Sprintf("ConcurrentMap"))
-	for i := 1; i <= 32; i = i << 1 {
-		combinedFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombined)))
-	}
-	combinedFile.WriteString("\n")
+	// combinedFile.WriteString(fmt.Sprintf("ConcurrentMap"))
+	// for i := 1; i <= 32; i = i << 1 {
+	// 	combinedFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombined)))
+	// }
+	// combinedFile.WriteString("\n")
 
 	// Concurrent Map - Interlocked
-	combinedFile.WriteString(fmt.Sprintf("ConcurrentMap-Interlocked"))
+	combinedFile.WriteString(fmt.Sprintf("ConcurrentMap (Interlocked)"))
 	for i := 1; i <= 32; i = i << 1 {
 		combinedFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ConcurrentCombined_Interlocked)))
 	}
 	combinedFile.WriteString("\n")
 
 	// Synchronized Map
-	combinedFile.WriteString(fmt.Sprintf("SynchronizedMap"))
+	combinedFile.WriteString(fmt.Sprintf("SynchronizedMap (Mutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		combinedFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.SynchronizedCombined)))
 	}
 	combinedFile.WriteString("\n")
 
 	// ReaderWriter Map
-	combinedFile.WriteString(fmt.Sprintf("ReaderWriterMap"))
+	combinedFile.WriteString(fmt.Sprintf("ReaderWriterMap (RWMutex)"))
 	for i := 1; i <= 32; i = i << 1 {
 		combinedFile.WriteString(fmt.Sprintf(",%.2f", MillionOpsPerSecond(i, combined_testing.ReaderWriterCombined)))
 	}
