@@ -639,6 +639,10 @@ next:
 
 	// Called to poll thorugh any skipped buckets
 pollSkippedBuckets:
+	// Reset backoff variables
+	spins = 0
+	backoff = DEFAULT_BACKOFF
+
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
 		// Reset backoff variables
@@ -982,16 +986,17 @@ next:
 
 	// Called to poll thorugh any skipped buckets
 pollSkippedBuckets:
+	// Reset backoff variables
+	spins = 0
+	backoff = DEFAULT_BACKOFF
+
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
-
 		// Since we cannot remove the processed buckets, we need to ensure that we are actually doing work.
 		// If we find all nil buckets, we are finished.
 		doneProcessing := true
 		for idx, bucketPtr := range citer.skippedBuckets {
+			// println("...g # ", g.goid, ": Polling: {idx:", idx, ",isNil:", bucketPtr == nil, ",spins:", spins, ",backoff:", backoff, "}")
 			// If the pointer is nil, we already processed it,
 			if bucketPtr == nil {
 				continue
@@ -1003,6 +1008,8 @@ pollSkippedBuckets:
 				citer.skippedBuckets[idx] = nil
 				continue
 			}
+
+			// println("...g # ", g.goid, ": Bucket #", idx, "{Lock:", hdr.lock, ",Count:", hdr.count, "}")
 
 			lock := atomic.Loaduintptr(&hdr.lock)
 
@@ -1037,6 +1044,9 @@ pollSkippedBuckets:
 					info.hdr = hdr
 					info.hdrPtr = bucketPtr
 					// TODO: IMPORTANT: MAKE IT SO WE CAN GET PARENT HDR!!!
+
+					// We are processing this hdr, so nil it out
+					citer.skippedBuckets[idx] = nil
 
 					// Begin processing the interlocked bucket
 					goto findKeyValue

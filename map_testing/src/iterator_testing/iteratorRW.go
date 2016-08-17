@@ -53,7 +53,7 @@ func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
                 cmap[k] = t
             }
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
+    }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func SynchronizedIterator_RW(nGoroutines int) int64 {
@@ -80,7 +80,7 @@ func SynchronizedIterator_RW(nGoroutines int) int64 {
             }
             mtx.Unlock()
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
+    }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func ReaderWriterIterator_RW(nGoroutines int) int64 {
@@ -107,7 +107,7 @@ func ReaderWriterIterator_RW(nGoroutines int) int64 {
             }
             mtx.Unlock()
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
+    }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func ChannelIterator_RW(nGoroutines int) int64 {

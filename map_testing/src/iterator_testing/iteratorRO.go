@@ -20,7 +20,7 @@ func ConcurrentIterator_RO(nGoroutines int) int64 {
                 v++
             }
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
+    }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
@@ -39,7 +39,7 @@ func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
                 v++
             }
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
+    }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
 func DefaultIterator_RO(nGoroutines int) int64 {
@@ -59,5 +59,5 @@ func DefaultIterator_RO(nGoroutines int) int64 {
                 v++
             }
         }
-    }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
+    }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
