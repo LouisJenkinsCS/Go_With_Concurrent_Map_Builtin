@@ -56,20 +56,21 @@ func main() {
 		m[i] = T{}
 	}
 
+	nGoroutines := 100
 	fmt.Println("Finished adding elements...")
 
 	var start, wg sync.WaitGroup
-	wg.Add(1000)
+	wg.Add(nGoroutines)
 	start.Add(1)
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < nGoroutines; i++ {
 		go func() {
 			iterations := 0
 			start.Wait()
 			for k, v := range sync.Interlocked m {
 				v.iter++
 				t := m[k]
-				t.iter = t.iter + 1 
+				t.iter = t.iter + 1
 				m[k] = t
 				iterations++
 			}
@@ -93,21 +94,21 @@ func main() {
 		}
 		checkMap[k] = true
 		t := m[k]
-		if t.iter != 1000 {
-			fmt.Printf("Key: %v;Expected: 1000; Received %v\n", k, t.iter)
+		if t.iter != uint64(nGoroutines) {
+			fmt.Printf("Key: %v;Expected: %v; Received %v\n", k, nGoroutines, t.iter)
 			err = true
 		}
 		delete(m, k)
 	}
 
-	for _, v := range checkMap {
+	for k, v := range checkMap {
 		if !v {
+			fmt.Printf("Missed Key: %v\n", k)
 			panic(fmt.Sprintf("CheckMap Not All True"))
 		}
 	}
 
 	fmt.Printf("Error: %v\n", err)
-
 
 	// if (rows * cols) > 1000000 {
 	// 	panic("Only a million elements may be added to the list to avoid resource exhaustion!")
