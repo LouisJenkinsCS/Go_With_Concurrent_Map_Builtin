@@ -1,3 +1,0 @@
-Map-IteratorRO,1,2,4,8,16,32
-ConcurrentMap (Interlocked),31.25,52.63,100.00,142.86,142.86,125.00
-DefaultMap (No Mutex),52.63,111.11,200.00,250.00,250.00,250.00

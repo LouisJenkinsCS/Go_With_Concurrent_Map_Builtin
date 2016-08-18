@@ -187,6 +187,10 @@ type bucketHdr struct {
 	count uintptr
 	// Prevent false sharing
 	_ [sys.CacheLineSize - 2*sys.PtrSize]byte
+	// Pointer to the parent bucketArray (if there is one)
+	parent *bucketArray
+	// Index of this hdr in parent
+	parentIdx uint32
 }
 
 /*
@@ -197,15 +201,14 @@ type bucketHdr struct {
 */
 type bucketArray struct {
 	// Fields embedded from bucketHdr; for complexity reasons, we can't actually embed the type in the runtime (because we would have to also do so in compiler)
-	lock  uintptr
-	count uintptr
-	_     [sys.CacheLineSize - 2*sys.PtrSize]byte
+	lock      uintptr
+	count     uintptr
+	_         [sys.CacheLineSize - 2*sys.PtrSize]byte
+	parent    *bucketArray
+	parentIdx uint32
+
 	// Seed is different for each bucketArray to ensure that the re-hashing resolves to different indice
 	seed uint32
-	// Associated with the backlink (see below), used to signify what index the bucketHdr that pointed to this is
-	backIdx uint32
-	// Pointer to the previous bucketArray that pointed to this, if there is one.
-	backLink *bucketArray
 	// Slice of bucketHdr's. TODO: Make in fixed memory???
 	buckets []*bucketHdr
 }
@@ -217,9 +220,12 @@ type bucketArray struct {
 */
 type bucketData struct {
 	// Fields embedded from bucketHdr
-	lock  uintptr
-	count uintptr
-	_     [sys.CacheLineSize - 2*sys.PtrSize]byte
+	lock      uintptr
+	count     uintptr
+	_         [sys.CacheLineSize - 2*sys.PtrSize]byte
+	parent    *bucketArray
+	parentIdx uint32
+
 	// Hash of the key-value corresponding to this index. If it is 0, it is empty. Aligned to cache line (64 bytes)
 	hash [MAX_SLOTS]uintptr
 	// It's key and value slots are below, and would appear as such if the runtime supported generics...
@@ -264,7 +270,7 @@ type concurrentIterator struct {
 	// If this is snapshot iteration, this is a pointer to bucketData, and if it is interlocked iteration this is a pointer to interlockedInfo
 	data unsafe.Pointer
 	// Slice of all buckets we skip over due to not being able to acquire the lock fast enough (and reduce overall convoying).
-	skippedBuckets []**bucketHdr
+	skippedBuckets []*bucketHdr
 }
 
 /**
@@ -512,8 +518,8 @@ next:
 		// We are not at the root, so go back one.
 		if citer.depth > 0 {
 			// Go back one
-			citer.idx = citer.arr.backIdx
-			citer.arr = citer.arr.backLink
+			citer.idx = citer.arr.parentIdx
+			citer.arr = citer.arr.parent
 
 			// Increment idx by one to move on to next bucketHdr
 			citer.idx++
@@ -611,7 +617,7 @@ next:
 			} else {
 				// During iteration, we do not backoff to reduce the effects of lock convoying. Instead if after
 				// a busy-wait spin, we skip this bucket and process it later.
-				citer.skippedBuckets = append(citer.skippedBuckets, &citer.arr.buckets[idx])
+				citer.skippedBuckets = append(citer.skippedBuckets, hdr)
 				goto next
 			}
 			spins++
@@ -645,30 +651,26 @@ pollSkippedBuckets:
 
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
-
 		// Since we cannot remove the processed buckets, we need to ensure that we are actually doing work.
 		// If we find all nil buckets, we are finished.
 		doneProcessing := true
-		for idx, bucketPtr := range citer.skippedBuckets {
+		for idx, hdr := range citer.skippedBuckets {
 			// If the pointer is nil, we already processed it,
-			if bucketPtr == nil {
+			if hdr == nil {
 				continue
 			}
 
-			hdr = *bucketPtr
 			// There is no data here (yet), dispose of it.
-			if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+			if atomic.Loaduintptr(&hdr.count) == 0 {
 				citer.skippedBuckets[idx] = nil
 				continue
 			}
 
 			lock := atomic.Loaduintptr(&hdr.lock)
 
-			// In the case where it is marked INVALID, we just continue through (as in next iteration it will reload the hdr for us)
+			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
 			if lock == INVALID {
+				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
 				doneProcessing = false
 				continue
 			}
@@ -717,7 +719,7 @@ pollSkippedBuckets:
 			doneProcessing = false
 		}
 
-		// If we haven't found at least one non-nil bucket, we're done.
+		// If we haven't found at least one non-processed bucket, we're done.
 		if doneProcessing {
 			break
 		}
@@ -835,11 +837,11 @@ findKeyValue:
 	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
 	if data.count == 0 {
 		// Invalidate and release the bucket (as it is being deleted)
-		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(info.hdrPtr)), nil)
+		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&data.parent.buckets[data.parentIdx])), nil)
 		atomic.Storeuintptr(&data.lock, INVALID)
 
 		// Also decrement number of buckets
-		atomic.Xadduintptr(&info.parentHdr.count, ^uintptr(0))
+		atomic.Xadduintptr(&data.parent.count, ^uintptr(0))
 	} else {
 		// Otherwise, just release the lock on the bucket
 		atomic.Storeuintptr(&data.lock, UNLOCKED)
@@ -847,11 +849,9 @@ findKeyValue:
 
 	// Zero all fields to help GC
 	info.hdr = nil
-	info.hdrPtr = nil
 	info.key = nil
 	info.value = nil
 	info.hash = nil
-	info.parentHdr = nil
 
 	// Find the next bucketData if there is one
 next:
@@ -863,8 +863,8 @@ next:
 		// We are not at the root, so go back one.
 		if citer.depth > 0 {
 			// Go back one
-			citer.idx = citer.arr.backIdx
-			citer.arr = citer.arr.backLink
+			citer.idx = citer.arr.parentIdx
+			citer.arr = citer.arr.parent
 
 			// Increment idx by one to move on to next bucketHdr
 			citer.idx++
@@ -960,7 +960,7 @@ next:
 			} else {
 				// During iteration, we do not backoff to reduce the effects of lock convoying. Instead if after
 				// a busy-wait spin, we skip this bucket and process it later.
-				citer.skippedBuckets = append(citer.skippedBuckets, &citer.arr.buckets[idx])
+				citer.skippedBuckets = append(citer.skippedBuckets, citer.arr.buckets[idx])
 				goto next
 			}
 			spins++
@@ -978,8 +978,6 @@ next:
 	}
 
 	info.hdr = hdr
-	info.hdrPtr = &citer.arr.buckets[idx]
-	info.parentHdr = (*bucketHdr)(unsafe.Pointer(citer.arr))
 
 	// We have the data we are looking for.
 	goto findKeyValue
@@ -1042,8 +1040,6 @@ pollSkippedBuckets:
 				// Test-And-Set
 				if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
 					info.hdr = hdr
-					info.hdrPtr = bucketPtr
-					// TODO: IMPORTANT: MAKE IT SO WE CAN GET PARENT HDR!!!
 
 					// We are processing this hdr, so nil it out
 					citer.skippedBuckets[idx] = nil
@@ -1135,8 +1131,10 @@ next:
 	for hdr == nil {
 		// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
 		newHdr := (*bucketHdr)(newobject(t.bucketdata))
-		// Since we're setting it, may as well attempt to acquire lock
+		// Since we're setting it, may as well attempt to acquire lock and fill out fields
 		newHdr.lock = gptr
+		newHdr.parent = arr
+		newHdr.parentIdx = uint32(idx)
 		// If we fail, then some other Goroutine has already placed theirs.
 		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 			// If we succeed, then we own this bucket and need to keep track of it
@@ -1164,8 +1162,10 @@ next:
 			if hdr == nil {
 				// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
 				newHdr := (*bucketHdr)(newobject(t.bucketdata))
-				// Since we're setting it, may as well attempt to acquire lock
+				// Since we're setting it, may as well attempt to acquire lock and fill out fields
 				newHdr.lock = gptr
+				newHdr.parent = arr
+				newHdr.parentIdx = uint32(idx)
 				// If we fail, then some other Goroutine has already placed theirs.
 				if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 					// If we succeed, then we own this bucket and need to keep track of it
@@ -1277,8 +1277,8 @@ next:
 		newArr.lock = ARRAY
 		newArr.buckets = make([]*bucketHdr, len(arr.buckets)*2)
 		newArr.seed = fastrand1()
-		newArr.backLink = arr
-		newArr.backIdx = uint32(idx)
+		newArr.parent = arr
+		newArr.parentIdx = uint32(idx)
 
 		// Rehash and move all key-value pairs
 		for i := 0; i < MAX_SLOTS; i++ {
@@ -1299,6 +1299,8 @@ next:
 				newData = (*bucketData)(unsafe.Pointer(newArr.buckets[newIdx]))
 				newData.assign(t, 0, newHash, k, v)
 				newData.count++
+				newData.parent = newArr
+				newData.parentIdx = uint32(newIdx)
 
 				continue
 			}
@@ -1386,7 +1388,6 @@ next:
 
 	// Save time by looking ahead of time (testing) if the header or if the bucket is empty
 	if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
-		// println("...g #", getg().goid, ": hdr == nil or hdr.count == 0...")
 		return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 	}
 
@@ -1780,6 +1781,8 @@ next:
 		newHdr := (*bucketHdr)(newobject(t.bucketdata))
 		// Since we're setting it, may as well attempt to acquire lock
 		newHdr.lock = gptr
+		newHdr.parent = arr
+		newHdr.parentIdx = uint32(idx)
 		// If we fail, then some other Goroutine has already placed theirs.
 		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 			// If we succeed, then we own this bucket and need to keep track of it
@@ -1810,6 +1813,8 @@ next:
 				newHdr := (*bucketHdr)(newobject(t.bucketdata))
 				// Since we're setting it, may as well attempt to acquire lock
 				newHdr.lock = gptr
+				newHdr.parent = arr
+				newHdr.parentIdx = uint32(idx)
 				// If we fail, then some other Goroutine has already placed theirs.
 				if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 					// If we succeed, then we own this bucket and need to keep track of it
@@ -1876,8 +1881,6 @@ next:
 	}
 
 	info.hdr = hdr
-	info.hdrPtr = &arr.buckets[idx]
-	info.parentHdr = (*bucketHdr)(unsafe.Pointer(arr))
 
 	data := (*bucketData)(unsafe.Pointer(hdr))
 	firstEmpty := -1
@@ -1919,8 +1922,8 @@ next:
 		newArr.lock = ARRAY
 		newArr.buckets = make([]*bucketHdr, len(arr.buckets)*2)
 		newArr.seed = fastrand1()
-		newArr.backLink = arr
-		newArr.backIdx = uint32(idx)
+		newArr.parent = arr
+		newArr.parentIdx = uint32(idx)
 
 		// Rehash and move all key-value pairs
 		for i := 0; i < MAX_SLOTS; i++ {
@@ -1939,6 +1942,8 @@ next:
 				newArr.count++
 
 				newData = (*bucketData)(unsafe.Pointer(newArr.buckets[newIdx]))
+				newData.parent = newArr
+				newData.parentIdx = uint32(newIdx)
 				newData.assign(t, 0, newHash, k, v)
 				newData.count++
 
@@ -1967,8 +1972,6 @@ next:
 		// In this case try again, to reduce contention and increase concurrency over the lock
 		arr = newArr
 		info.hdr = nil
-		info.hdrPtr = nil
-		info.parentHdr = nil
 
 		goto next
 	}
@@ -2280,11 +2283,11 @@ func maprelease_interlocked(t *maptype, info *interlockedInfo, h *hmap) {
 	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
 	if info.hdr.count == 0 {
 		// Invalidate and release the bucket (as it is being deleted)
-		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(info.hdrPtr)), nil)
+		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&info.hdr.parent.buckets[info.hdr.parentIdx])), nil)
 		atomic.Storeuintptr(&info.hdr.lock, INVALID)
 
 		// Also decrement number of buckets
-		atomic.Xadduintptr(&info.parentHdr.count, ^uintptr(0))
+		atomic.Xadduintptr(&info.hdr.parent.count, ^uintptr(0))
 	} else {
 		// Otherwise, just release the lock on the bucket
 		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
