@@ -1,2 +1,3 @@
 Map-Intset,1,2,4,8,16,32
-ConcurrentMap,3.22,6.17,12.82,19.23,17.86
+ConcurrentMap,3.03,6.13,12.99,21.28,18.52,17.86
+SynchronizedMap (Mutex),5.62,5.35,3.88,3.40

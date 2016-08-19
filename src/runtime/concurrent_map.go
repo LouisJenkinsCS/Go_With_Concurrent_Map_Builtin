@@ -187,10 +187,11 @@ type bucketHdr struct {
 	count uintptr
 	// Prevent false sharing
 	_ [sys.CacheLineSize - 2*sys.PtrSize]byte
-	// Pointer to the parent bucketArray (if there is one)
-	parent *bucketArray
 	// Index of this hdr in parent
 	parentIdx uint32
+	_         uint32
+	// Pointer to the parent bucketArray (if there is one)
+	parent *bucketArray
 }
 
 /*
@@ -204,8 +205,9 @@ type bucketArray struct {
 	lock      uintptr
 	count     uintptr
 	_         [sys.CacheLineSize - 2*sys.PtrSize]byte
-	parent    *bucketArray
 	parentIdx uint32
+	_         uint32
+	parent    *bucketArray
 
 	// Seed is different for each bucketArray to ensure that the re-hashing resolves to different indice
 	seed uint32
@@ -223,8 +225,9 @@ type bucketData struct {
 	lock      uintptr
 	count     uintptr
 	_         [sys.CacheLineSize - 2*sys.PtrSize]byte
-	parent    *bucketArray
 	parentIdx uint32
+	_         uint32
+	parent    *bucketArray
 
 	// Hash of the key-value corresponding to this index. If it is 0, it is empty. Aligned to cache line (64 bytes)
 	hash [MAX_SLOTS]uintptr
@@ -1116,6 +1119,7 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 	var hdr *bucketHdr
 	g := getg()
 	gptr := uintptr(unsafe.Pointer(g))
+	// println("Root length:", len(arr.buckets))
 
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
 next:
@@ -1178,7 +1182,9 @@ next:
 
 		// If it's recursive, try again on new bucket
 		if lock == ARRAY {
+			// println("Old Array Length:", len(arr.buckets))
 			arr = (*bucketArray)(unsafe.Pointer(hdr))
+			// println("New Array Length:", len(arr.buckets))
 			goto next
 		}
 
@@ -1295,9 +1301,17 @@ next:
 	if firstEmpty == -1 && hdr.count == MAX_SLOTS {
 		// println("g #", getg().goid, ": Resizing...")
 		// Allocate and initialize
+		// println("len(arr.buckets) = ", len(arr.buckets))
 		newArr := (*bucketArray)(newobject(t.bucketarray))
+		// println("len(arr.buckets) = ", len(arr.buckets))
 		newArr.lock = ARRAY
+		// println("sizeof bucketHdr =", unsafe.Sizeof(bucketHdr{}), ";sizeof bucketData =", unsafe.Sizeof(bucketData{}), ";sizeof bucketArray =", unsafe.Sizeof(bucketArray{}))
+		// println("compiler_sizeof bucketHdr =", t.buckethdr.size, ";compiler_sizeof bucketData =", t.bucketdata.size, ";compiler_sizeof bucketArray =", t.bucketarray.size)
+		// println("arr - newArr =", uintptr(unsafe.Pointer(arr))-uintptr(unsafe.Pointer(newArr)))
+		// println("len(arr.buckets) = ", len(arr.buckets))
 		newArr.buckets = make([]*bucketHdr, len(arr.buckets)*2)
+		// println("len(arr.buckets) = ", len(arr.buckets))
+		// println("len(newArr.buckets) = ", len(newArr.buckets))
 		newArr.seed = fastrand1()
 		newArr.parent = arr
 		newArr.parentIdx = uint32(idx)
@@ -1342,6 +1356,7 @@ next:
 		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(sys.PtrSize)+uintptr(t.keysize)+uintptr(t.valuesize)))
 		// Update and then invalidate to point to nested ARRAY
 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
+		// println("len: ", len(arr.buckets), "parentIdx: ", data.parentIdx, ", idx: ", idx)
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
 		atomic.Storeuintptr(&hdr.lock, INVALID)
 
