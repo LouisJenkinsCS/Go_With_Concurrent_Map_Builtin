@@ -187,7 +187,7 @@ func hmap(t *Type) *Type {
 	field[6] = makefield("nevacuate", Types[TUINTPTR])
 	field[7] = makefield("overflow", Types[TUNSAFEPTR])
 	// L.J: Inserted unsafe.Pointer to be used in case it is Concurrent.
-	field[8] = makefield("chdr", Ptrto(concurrentMap(t)))
+	field[8] = makefield("chdr", Types[TUNSAFEPTR])
 
 	h := typ(TSTRUCT)
 	h.Noalg = true
@@ -234,7 +234,7 @@ func hiter(t *Type) *Type {
 	field[9] = makefield("stuff", Types[TUINTPTR]) // offset+wrapped+B+I
 	field[10] = makefield("bucket", Types[TUINTPTR])
 	field[11] = makefield("checkBucket", Types[TUINTPTR])
-	field[12] = makefield("citerHdr", Ptrto(concurrentIterator(t))) // Concurrent iterator header
+	field[12] = makefield("citerHdr", Types[TUNSAFEPTR]) // Concurrent iterator header
 
 	// build iterator struct holding the above fields
 	i := typ(TSTRUCT)
@@ -331,7 +331,7 @@ func bucketData(t *Type) *Type {
 	field[0] = makefield("lock", Types[TUINTPTR])
 	field[1] = makefield("count", Types[TUINTPTR])
 	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
-	field[3] = makefield("parent", Types[TUNSAFEPTR])
+	field[3] = makefield("parent", Ptrto(bucketHdr(t)))
 	field[4] = makefield("parentIdx", Types[TUINT32])
 	field[5] = makefield("hash", typArray(Types[TUINTPTR], int64(nChains)))
 	field[6] = makefield("keys", keyArr)
@@ -351,14 +351,15 @@ func bucketHdr(t *Type) *Type {
 		return t.MapType().BucketHdr
 	}
 
+	bhdr := typ(TSTRUCT)
+
 	var field [5]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
 	field[1] = makefield("count", Types[TUINTPTR])
 	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
-	field[3] = makefield("parent", Types[TUNSAFEPTR])
+	field[3] = makefield("parent", Ptrto(bhdr))
 	field[4] = makefield("parentIdx", Types[TUINT32])
 
-	bhdr := typ(TSTRUCT)
 	bhdr.Noalg = true
 	bhdr.Local = t.Local
 	bhdr.SetFields(field[:])
@@ -381,7 +382,7 @@ func bucketArray(t *Type) *Type {
 	field[0] = makefield("lock", Types[TUINTPTR])
 	field[1] = makefield("count", Types[TUINTPTR])
 	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
-	field[3] = makefield("parent", Types[TUNSAFEPTR])
+	field[3] = makefield("parent", Ptrto(bucketHdr(t)))
 	field[4] = makefield("parentIdx", Types[TUINT32])
 	field[5] = makefield("seed", Types[TUINT32])
 	field[6] = makefield("buckets", Ptrto(bucketHdr(t)))

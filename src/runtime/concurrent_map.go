@@ -660,18 +660,18 @@ pollSkippedBuckets:
 				continue
 			}
 
-			// There is no data here (yet), dispose of it.
-			if atomic.Loaduintptr(&hdr.count) == 0 {
-				citer.skippedBuckets[idx] = nil
-				continue
-			}
-
 			lock := atomic.Loaduintptr(&hdr.lock)
 
 			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
 			if lock == INVALID {
 				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
 				doneProcessing = false
+				continue
+			}
+
+			// There is no data here (yet), dispose of it.
+			if atomic.Loaduintptr(&hdr.count) == 0 {
+				citer.skippedBuckets[idx] = nil
 				continue
 			}
 
@@ -993,27 +993,24 @@ pollSkippedBuckets:
 		// Since we cannot remove the processed buckets, we need to ensure that we are actually doing work.
 		// If we find all nil buckets, we are finished.
 		doneProcessing := true
-		for idx, bucketPtr := range citer.skippedBuckets {
-			// println("...g # ", g.goid, ": Polling: {idx:", idx, ",isNil:", bucketPtr == nil, ",spins:", spins, ",backoff:", backoff, "}")
+		for idx, hdr := range citer.skippedBuckets {
 			// If the pointer is nil, we already processed it,
-			if bucketPtr == nil {
+			if hdr == nil {
 				continue
 			}
-
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(bucketPtr)))
-			// There is no data here (yet), dispose of it.
-			if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
-				citer.skippedBuckets[idx] = nil
-				continue
-			}
-
-			// println("...g # ", g.goid, ": Bucket #", idx, "{Lock:", hdr.lock, ",Count:", hdr.count, "}")
 
 			lock := atomic.Loaduintptr(&hdr.lock)
 
-			// In the case where it is marked INVALID, we just continue through (as in next iteration it will reload the hdr for us)
+			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
 			if lock == INVALID {
+				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
 				doneProcessing = false
+				continue
+			}
+
+			// There is no data here (yet), dispose of it.
+			if atomic.Loaduintptr(&hdr.count) == 0 {
+				citer.skippedBuckets[idx] = nil
 				continue
 			}
 
@@ -1160,7 +1157,7 @@ next:
 			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 			// If the hdr was deleted, then attempt to create a new one and try again
 			if hdr == nil {
-				// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
+				// Note that bucketData has the same first 5 fields as bucketHdr, and can be safely casted
 				newHdr := (*bucketHdr)(newobject(t.bucketdata))
 				// Since we're setting it, may as well attempt to acquire lock and fill out fields
 				newHdr.lock = gptr
@@ -1219,6 +1216,31 @@ next:
 				}
 			}
 			spins++
+
+			if spins >= 1000 {
+				println("...g # ", g.goid, ": Spins:", spins)
+			}
+
+			if spins > 10000 {
+				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
+				println("holder: ", holder)
+				println("lock: ", lock)
+				println("gptr: ", gptr)
+				println("hdr: {")
+				println("\taddress: ", hdr)
+				println("\tcount: ", hdr.count)
+				println("\tlock: ", hdr.lock)
+				println("\tparent: {")
+				println("\t\taddress: ", hdr.parent)
+				println("\t\tlock: ", hdr.parent.lock)
+				println("\t\tcount: ", hdr.parent.count)
+				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
+				println("\t}")
+				println("\tparentIdx: ", hdr.parentIdx)
+				println("}")
+
+				throw("Deadlock Detected!")
+			}
 
 			// We test the lock on each iteration
 			lock = atomic.Loaduintptr(&hdr.lock)
@@ -1454,6 +1476,31 @@ next:
 			}
 			spins++
 
+			if spins >= 1000 {
+				println("...g # ", g.goid, ": Spins:", spins)
+			}
+
+			if spins > 10000 {
+				println("...g # ", g.goid, ": Function: cmapaccess, Crash Dump: {")
+				println("holder: ", holder)
+				println("lock: ", lock)
+				println("gptr: ", gptr)
+				println("hdr: {")
+				println("\taddress: ", hdr)
+				println("\tcount: ", hdr.count)
+				println("\tlock: ", hdr.lock)
+				println("\tparent: {")
+				println("\t\taddress: ", hdr.parent)
+				println("\t\tlock: ", hdr.parent.lock)
+				println("\t\tcount: ", hdr.parent.count)
+				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
+				println("\t}")
+				println("\tparentIdx: ", hdr.parentIdx)
+				println("}")
+
+				throw("Deadlock Detected!")
+			}
+
 			// We test the lock on each iteration
 			lock = atomic.Loaduintptr(&hdr.lock)
 			// If the previous lock-holder released the lock, attempt to acquire again.
@@ -1675,6 +1722,31 @@ next:
 				}
 			}
 			spins++
+
+			if spins >= 1000 {
+				println("...g # ", g.goid, ": Spins:", spins)
+			}
+
+			if spins > 10000 {
+				println("...g # ", g.goid, ": Function: cmapdelete, Crash Dump: {")
+				println("holder: ", holder)
+				println("lock: ", lock)
+				println("gptr: ", gptr)
+				println("hdr: {")
+				println("\taddress: ", hdr)
+				println("\tcount: ", hdr.count)
+				println("\tlock: ", hdr.lock)
+				println("\tparent: {")
+				println("\t\taddress: ", hdr.parent)
+				println("\t\tlock: ", hdr.parent.lock)
+				println("\t\tcount: ", hdr.parent.count)
+				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
+				println("\t}")
+				println("\tparentIdx: ", hdr.parentIdx)
+				println("}")
+
+				throw("Deadlock Detected!")
+			}
 
 			// We test the lock on each iteration
 			lock = atomic.Loaduintptr(&hdr.lock)

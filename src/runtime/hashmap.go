@@ -96,7 +96,7 @@ const (
 	iterator    = 1 // there may be an iterator using buckets
 	oldIterator = 2 // there may be an iterator using oldbuckets
 	hashWriting = 4 // a goroutine is writing to the map
-	concurrent = 8 // L.J: Inserted to notify this is a concurrent map
+	concurrent  = 8 // L.J: Inserted to notify this is a concurrent map
 
 	// sentinel bucket ID for iterator checks
 	noCheck = 1<<(8*sys.PtrSize) - 1
@@ -158,7 +158,7 @@ type hiter struct {
 	i           uint8
 	bucket      uintptr
 	checkBucket uintptr
-	citerHdr unsafe.Pointer // Concurrent Map Iterator Header
+	citerHdr    unsafe.Pointer // Concurrent Map Iterator Header
 }
 
 func evacuated(b *bmap) bool {
@@ -219,7 +219,7 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrent 
 
 	/*
 		Our injected case. Without modifying the map, or adding much overhead, we explicitly
-		pass our CMAP 
+		pass our CMAP
 	*/
 	if concurrent {
 		return makecmap(t, hint, h, bucket)
@@ -665,7 +665,7 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 	it.overflow[1] = nil
 	it.citerHdr = nil
 
-	if h != nil && (h.flags & concurrent) != 0 {
+	if h != nil && (h.flags&concurrent) != 0 {
 		cmapiterinit(t, h, it)
 		return
 	}
@@ -924,6 +924,27 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 		xv := add(xk, bucketCnt*uintptr(t.keysize))
 		yv := add(yk, bucketCnt*uintptr(t.keysize))
 		for ; b != nil; b = b.overflow(t) {
+			for i := 0; i < 8; i++ {
+				if b.tophash[i] != 0 && b.tophash[i] < minTopHash {
+					println("b: {")
+					for i := 0; i < 8; i++ {
+						println("tophash[", i, "]: ", b.tophash[i])
+					}
+					println("}")
+					println("h: {")
+					println("B: ", h.B)
+					println("Count: ", h.count)
+					println("Buckets: ", h.buckets)
+					println("OldBuckets: ", h.oldbuckets)
+					println("Chdr: ", h.chdr)
+					println("Flags: ", h.flags)
+					println("Hash0: ", h.hash0)
+					println("Nevacuate: ", h.nevacuate)
+					println("Overflow", h.overflow)
+					println("}")
+					throw("Bad top hash!!!")
+				}
+			}
 			k := add(unsafe.Pointer(b), dataOffset)
 			v := add(k, bucketCnt*uintptr(t.keysize))
 			for i := 0; i < bucketCnt; i, k, v = i+1, add(k, uintptr(t.keysize)), add(v, uintptr(t.valuesize)) {
@@ -933,6 +954,23 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 					continue
 				}
 				if top < minTopHash {
+					println("top: ", top, ", minTopHash: ", minTopHash, ", b: {")
+					for i := 0; i < 8; i++ {
+						println("tophash[", i, "]: ", b.tophash[i])
+					}
+					println("}")
+					println("h: {")
+					println("B: ", h.B)
+					println("Count: ", h.count)
+					println("Buckets: ", h.buckets)
+					println("OldBuckets: ", h.oldbuckets)
+					println("Chdr: ", h.chdr)
+					println("Flags: ", h.flags)
+					println("Hash0: ", h.hash0)
+					println("Nevacuate: ", h.nevacuate)
+					println("Overflow", h.overflow)
+					println("}")
+
 					throw("bad map state")
 				}
 				k2 := k
