@@ -6,15 +6,7 @@ import "time"
 import "settings"
 
 func ConcurrentIntset(nGoroutines int) int64 {
-	cmap := make(map[int64]settings.Unused, 0, 1)
-
-	// Initialize to half full
-	for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
-		cmap[int64(i)] = settings.UNUSED
-	}
-	for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
-		delete(cmap, int64(i))
-	}
+	cmap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE, nGoroutines)
 
 	return settings.ParallelTest(nGoroutines, func() {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
@@ -47,16 +39,8 @@ func ConcurrentIntset(nGoroutines int) int64 {
 }
 
 func SynchronizedIntset(nGoroutines int) int64 {
-	smap := make(map[int64]settings.Unused)
+	smap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE)
 	mtx := sync.Mutex{}
-
-	// Initialize to half full
-	for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
-		smap[int64(i)] = settings.UNUSED
-	}
-	for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
-		delete(smap, int64(i))
-	}
 
 	return settings.ParallelTest(nGoroutines, func() {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
@@ -96,16 +80,8 @@ func SynchronizedIntset(nGoroutines int) int64 {
 }
 
 func ReaderWriterIntset(nGoroutines int) int64 {
-	rwmap := make(map[int64]settings.Unused)
+	rwmap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE)
 	mtx := sync.RWMutex{}
-
-	// Initialize to half full
-	for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
-		rwmap[int64(i)] = settings.UNUSED
-	}
-	for i := uint64(0); i < settings.INTSET_VALUE_RANGE; i++ {
-		delete(rwmap, int64(i))
-	}
 
 	return settings.ParallelTest(nGoroutines, func() {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))

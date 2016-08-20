@@ -1,0 +1,4 @@
+Map-Combined,1,2,4,8,16,32
+ConcurrentMap (Interlocked),14.29,25.64,50.00,66.67,71.43,66.67
+SynchronizedMap (Mutex),28.57,27.78,27.78,27.03,27.03,27.03
+ReaderWriterMap (RWMutex),27.78,29.41,29.41,29.41,29.41,29.41

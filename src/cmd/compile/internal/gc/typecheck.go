@@ -1806,6 +1806,7 @@ OpSwitch:
 					return n
 				}
 				n.Right = right
+				n.Right.flags |= uint8(1 << 7)
 			} else {
 				n.Right = Nodintconst(0)
 			}
@@ -2040,12 +2041,12 @@ OpSwitch:
 		typecheckslice(n.Nbody.Slice(), Etop)
 		typecheckslice(n.Rlist.Slice(), Etop)
 		break OpSwitch
-	
+
 	case OINTERLOCKED:
 		ok |= Etop
 		t := n.List.First().Type
 		if t != nil {
-			if !t.IsMap()  {
+			if !t.IsMap() {
 				Yyerror("sync.Interlocked requires an assignment from an rvalue map!Received %v of type %v", n.List.First(), t)
 			}
 		}
@@ -3911,7 +3912,7 @@ func (n *Node) isterminating() bool {
 
 	case OIF:
 		return n.Nbody.isterminating() && n.Rlist.isterminating()
-	
+
 	case OINTERLOCKED:
 		return n.Nbody.isterminating()
 

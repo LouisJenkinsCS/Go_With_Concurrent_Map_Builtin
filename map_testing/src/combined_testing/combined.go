@@ -9,7 +9,7 @@ import (
 )
 
 func ConcurrentCombined(nGoroutines int) int64 {
-    cmap := make(map[int64]settings.Unused, 0, 1)
+    cmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
     for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
@@ -58,7 +58,7 @@ func ConcurrentCombined(nGoroutines int) int64 {
 }
 
 func ConcurrentCombined_Interlocked(nGoroutines int) int64 {
-    cmap := make(map[int64]settings.Unused, 0, 1)
+    cmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
     for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
@@ -106,7 +106,7 @@ func ConcurrentCombined_Interlocked(nGoroutines int) int64 {
 }
 
 func SynchronizedCombined(nGoroutines int) int64 {
-    smap := make(map[int64]settings.Unused)
+    smap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE)
     var mtx sync.Mutex
     
     // Fill map to reduce overhead of resizing
@@ -163,7 +163,7 @@ func SynchronizedCombined(nGoroutines int) int64 {
 }
 
 func ReaderWriterCombined(nGoroutines int) int64 {
-    rwmap := make(map[int64]settings.Unused)
+    rwmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE)
     var mtx sync.RWMutex
     
     // Fill map to reduce overhead of resizing

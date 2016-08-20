@@ -15,7 +15,7 @@ type T struct {
 }
 
 func ConcurrentCombinedSkim(nGoroutines int) int64 {
-    cmap := make(map[int64]T, 0, 1)
+    cmap := make(map[int64]T, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
     for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
@@ -69,7 +69,7 @@ func ConcurrentCombinedSkim(nGoroutines int) int64 {
 }
 
 func ConcurrentCombinedSkim_Interlocked(nGoroutines int) int64 {
-    cmap := make(map[int64]T, 0, 1)
+    cmap := make(map[int64]T, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
     for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
@@ -119,7 +119,7 @@ func ConcurrentCombinedSkim_Interlocked(nGoroutines int) int64 {
 }
 
 func SynchronizedCombinedSkim(nGoroutines int) int64 {
-    smap := make(map[int64]T)
+    smap := make(map[int64]T, settings.COMBINED_KEY_RANGE)
     var mtx sync.Mutex
     
     // Fill map to reduce overhead of resizing
@@ -178,7 +178,7 @@ func SynchronizedCombinedSkim(nGoroutines int) int64 {
 }
 
 func ReaderWriterCombinedSkim(nGoroutines int) int64 {
-    rwmap := make(map[int64]T)
+    rwmap := make(map[int64]T, settings.COMBINED_KEY_RANGE)
     var mtx sync.RWMutex
     
     // Fill map to reduce overhead of resizing

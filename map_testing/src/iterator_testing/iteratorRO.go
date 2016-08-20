@@ -5,7 +5,7 @@ import (
 )
 
 func ConcurrentIterator_RO(nGoroutines int) int64 {
-    cmap := make(map[int64]settings.Unused, 0, 1)
+    cmap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
     for i := int64(0); i < settings.ITERATOR_NUM_ELEMS; i++ {
@@ -24,7 +24,7 @@ func ConcurrentIterator_RO(nGoroutines int) int64 {
 }
 
 func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
-    cmap := make(map[int64]settings.Unused, 0, 1)
+    cmap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
     for i := int64(0); i < settings.ITERATOR_NUM_ELEMS; i++ {
@@ -43,7 +43,7 @@ func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
 }
 
 func DefaultIterator_RO(nGoroutines int) int64 {
-    smap := make(map[int64]settings.Unused)
+    smap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS)
 
     
     // Initialize the map with a fixed number of elements.

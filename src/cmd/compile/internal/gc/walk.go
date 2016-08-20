@@ -1553,17 +1553,14 @@ opswitch:
 			r = Nod(OADDR, var_, nil)
 		}
 
-		debug := false
-
-		// L.J: Only change in code
-		if n.Right != nil && n.Right.Int64() != 0 {
+		// The last bit is marked if the user passed a third argument.
+		if (n.Right.flags & uint8(1<<7)) != 0 {
 			t.MapType().isConcurrent = 1
-			debug = true
 		}
 
 		fn := syslook("makemap")
 		fn = substArgTypes(fn, hmap(t), mapbucket(t), t.Key(), t.Val())
-		n = mkcall1(fn, n.Type, init, typename(n.Type), conv(n.Left, Types[TINT64]), a, r, Nodbool(debug))
+		n = mkcall1(fn, n.Type, init, typename(n.Type), conv(n.Left, Types[TINT64]), a, r, conv(n.Right, Types[TINT64]))
 
 	case OMAKESLICE:
 		l := n.Left

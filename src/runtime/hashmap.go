@@ -192,7 +192,7 @@ func (h *hmap) createOverflow() {
 // can be created on the stack, h and/or bucket may be non-nil.
 // If h != nil, the map can be created directly in h.
 // If bucket != nil, bucket can be used as the first bucket.
-func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrent bool) *hmap {
+func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrencyLevel int64) *hmap {
 	if sz := unsafe.Sizeof(hmap{}); sz > 56 || sz != t.hmap.size {
 		println("runtime: sizeof(hmap) =", sz, ", t.hmap.size =", t.hmap.size)
 		throw("bad hmap size")
@@ -221,8 +221,8 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrent 
 		Our injected case. Without modifying the map, or adding much overhead, we explicitly
 		pass our CMAP
 	*/
-	if concurrent {
-		return makecmap(t, hint, h, bucket)
+	if concurrencyLevel > 0 {
+		return makecmap(t, hint, h, bucket, concurrencyLevel)
 	}
 
 	// invariants we depend on. We should probably check these at compile time
@@ -924,27 +924,6 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 		xv := add(xk, bucketCnt*uintptr(t.keysize))
 		yv := add(yk, bucketCnt*uintptr(t.keysize))
 		for ; b != nil; b = b.overflow(t) {
-			for i := 0; i < 8; i++ {
-				if b.tophash[i] != 0 && b.tophash[i] < minTopHash {
-					println("b: {")
-					for i := 0; i < 8; i++ {
-						println("tophash[", i, "]: ", b.tophash[i])
-					}
-					println("}")
-					println("h: {")
-					println("B: ", h.B)
-					println("Count: ", h.count)
-					println("Buckets: ", h.buckets)
-					println("OldBuckets: ", h.oldbuckets)
-					println("Chdr: ", h.chdr)
-					println("Flags: ", h.flags)
-					println("Hash0: ", h.hash0)
-					println("Nevacuate: ", h.nevacuate)
-					println("Overflow", h.overflow)
-					println("}")
-					throw("Bad top hash!!!")
-				}
-			}
 			k := add(unsafe.Pointer(b), dataOffset)
 			v := add(k, bucketCnt*uintptr(t.keysize))
 			for i := 0; i < bucketCnt; i, k, v = i+1, add(k, uintptr(t.keysize)), add(v, uintptr(t.valuesize)) {
@@ -954,23 +933,6 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 					continue
 				}
 				if top < minTopHash {
-					println("top: ", top, ", minTopHash: ", minTopHash, ", b: {")
-					for i := 0; i < 8; i++ {
-						println("tophash[", i, "]: ", b.tophash[i])
-					}
-					println("}")
-					println("h: {")
-					println("B: ", h.B)
-					println("Count: ", h.count)
-					println("Buckets: ", h.buckets)
-					println("OldBuckets: ", h.oldbuckets)
-					println("Chdr: ", h.chdr)
-					println("Flags: ", h.flags)
-					println("Hash0: ", h.hash0)
-					println("Nevacuate: ", h.nevacuate)
-					println("Overflow", h.overflow)
-					println("}")
-
 					throw("bad map state")
 				}
 				k2 := k
@@ -1086,7 +1048,7 @@ func ismapkey(t *_type) bool {
 
 //go:linkname reflect_makemap reflect.makemap
 func reflect_makemap(t *maptype) *hmap {
-	return makemap(t, 0, nil, nil, false)
+	return makemap(t, 0, nil, nil, 0)
 }
 
 //go:linkname reflect_mapaccess reflect.mapaccess

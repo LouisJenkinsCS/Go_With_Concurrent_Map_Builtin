@@ -157,6 +157,9 @@ const (
 	// The bit that gets set when we finished wrapping around the bucketArray is the very last one.
 	WRAPPED = uint32(1 << 31)
 
+	// During pre-expansion, this is the number of buckets per potential Goroutine accessing the map in parallel
+	BUCKET_PER_GOROUTINE = int64(2)
+
 	// See hashmap.go, this obtains a properly aligned offset to the data
 	// Is used to obtain the array of keys and values at the end of the runtime representation of the bucketData type.
 	cdataOffset = unsafe.Offsetof(struct {
@@ -1087,7 +1090,7 @@ pollSkippedBuckets:
 
 	make(map[keyType]valType, NUM_ELEMS, NUM_CONCURRENCY)
 */
-func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
+func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrencyLevel int64) *hmap {
 	// Initialize the hashmap if needed
 	if h == nil {
 		h = (*hmap)(newobject(t.hmap))
@@ -1097,6 +1100,59 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 	cmap := (*concurrentMap)(newobject(t.concurrentmap))
 	cmap.root.buckets = make([]*bucketHdr, DEFAULT_BUCKETS)
 	cmap.root.seed = fastrand1()
+	cmap.root.lock = ARRAY
+
+	// We need enough buckets to hold all elements
+	maxHint := hint / MAX_SLOTS
+	gomaxprocs := int64(GOMAXPROCS(0))
+	// As a rule of thumb, we if concurrencyLevel < GOMAXPROCS, we raise it to GOMAXPROCS anyway.
+	if concurrencyLevel < gomaxprocs {
+		concurrencyLevel = gomaxprocs
+	}
+
+	// We also want to allow at least BUCKET_PER_GOROUTINE buckets per Goroutine to use (to maximize potential concurrency)
+	if int64(concurrencyLevel)*BUCKET_PER_GOROUTINE > maxHint {
+		maxHint = concurrencyLevel * int64(BUCKET_PER_GOROUTINE)
+	}
+
+	// The root buckets are of size DEFAULT_BUCKETS, but the child buckets are always twice the size as the previous.
+	// What this means is that the number of buckets is DEFAULT_BUCKETS * (2 * DEFAULT_BUCKETS) * (3 * DEFAULT_BUCKETS) * ... * (N * DEFAULT_BUCKETS)
+	nBuckets := int64(32)
+	nestingLevel := uint32(0)
+	for i := uint32(0); nBuckets < maxHint; i++ {
+		nestingLevel++
+		nBuckets *= 32 * (1 << nestingLevel)
+	}
+
+	// Begin expansion out to the nestingLevel; We stop pre-expansion at level 2 for simplicity sake
+	// (and that at this level it can take 2 Million elements, more than enough, plus with the high memory overhead)
+	if nestingLevel > 0 {
+		cmap.root.count = DEFAULT_BUCKETS
+		// Fill out nesting level 1
+		for i := uint32(0); i < DEFAULT_BUCKETS; i++ {
+			arrL1 := (*bucketArray)(newobject(t.bucketarray))
+			arrL1.lock = ARRAY
+			arrL1.seed = fastrand1()
+			arrL1.buckets = make([]*bucketHdr, DEFAULT_BUCKETS*2)
+			arrL1.parent = &cmap.root
+			arrL1.parentIdx = i
+			arrL1.count = DEFAULT_BUCKETS * 2
+			cmap.root.buckets[i] = (*bucketHdr)(unsafe.Pointer(arrL1))
+
+			if nestingLevel > 1 {
+				// Fill out nesting level 2
+				for j := uint32(0); j < DEFAULT_BUCKETS*2; j++ {
+					arrL2 := (*bucketArray)(newobject(t.bucketarray))
+					arrL2.lock = ARRAY
+					arrL2.seed = fastrand1()
+					arrL2.buckets = make([]*bucketHdr, DEFAULT_BUCKETS*4)
+					arrL2.parent = arrL1
+					arrL2.parentIdx = j
+					arrL1.buckets[j] = (*bucketHdr)(unsafe.Pointer(arrL2))
+				}
+			}
+		}
+	}
 
 	h.chdr = unsafe.Pointer(cmap)
 	h.flags = 8 // CONCURRENT flag is non exported.

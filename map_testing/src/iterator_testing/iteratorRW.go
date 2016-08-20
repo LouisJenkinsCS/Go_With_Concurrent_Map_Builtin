@@ -10,7 +10,7 @@ type T struct {
 }
 
 func ConcurrentIterator_RW(nGoroutines int) int64 {
-    cmap := make(map[int64]T, 0, 1)
+    cmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
     for i := int64(0); i < settings.ITERATOR_NUM_ELEMS; i++ {
@@ -33,7 +33,7 @@ func ConcurrentIterator_RW(nGoroutines int) int64 {
 }
 
 func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
-    cmap := make(map[int64]T, 0, 1)
+    cmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
     for i := int64(0); i < settings.ITERATOR_NUM_ELEMS; i++ {
@@ -57,7 +57,7 @@ func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
 }
 
 func SynchronizedIterator_RW(nGoroutines int) int64 {
-    smap := make(map[int64]T)
+    smap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS)
     var mtx sync.Mutex
 
     // Initialize the map with a fixed number of elements.
@@ -84,7 +84,7 @@ func SynchronizedIterator_RW(nGoroutines int) int64 {
 }
 
 func ReaderWriterIterator_RW(nGoroutines int) int64 {
-    rwmap := make(map[int64]T)
+    rwmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS)
     var mtx sync.RWMutex
 
     // Initialize the map with a fixed number of elements.
@@ -111,7 +111,7 @@ func ReaderWriterIterator_RW(nGoroutines int) int64 {
 }
 
 func ChannelIterator_RW(nGoroutines int) int64 {
-    chmap := make(map[int64]T)
+    chmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS)
     ch := make(chan int64, settings.ITERATOR_NUM_ELEMS)
     var done sync.WaitGroup
     done.Add(1)
