@@ -1,4 +1,4 @@
-Map-Intset,1,2,4,8,16,32
-ConcurrentMap,2.09,4.95,11.76,15.62,13.70,13.51
-SynchronizedMap (Mutex),4.69,4.17,3.66,3.50,3.48,3.34
-ReaderWriterMap (RWMutex),4.78,3.45,2.99,2.49,2.38,2.27
+intset,1,2,4,8,16,32
+Concurrent Map,3.76,7.30,14.93,23.26,20.41,20.83
+Synchronized Map (Mutex),6.25,5.49,4.41,4.03,4.05,4.10
+ReaderWriter Map (RWMutex),5.99,4.15,3.57,3.80,3.41,3.23
