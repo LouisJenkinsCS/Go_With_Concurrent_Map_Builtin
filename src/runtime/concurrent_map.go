@@ -1216,7 +1216,7 @@ next:
 			// Reload hdr, since what it was pointed to has changed
 			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 			// If the hdr was deleted, then attempt to create a new one and try again
-			if hdr == nil {
+			for hdr == nil {
 				// Note that bucketData has the same first 5 fields as bucketHdr, and can be safely casted
 				newHdr := (*bucketHdr)(newobject(t.bucketdata))
 				// Since we're setting it, may as well attempt to acquire lock and fill out fields
@@ -1951,7 +1951,7 @@ next:
 			// Reload hdr, since what it was pointed to has changed
 			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 			// If the hdr was deleted, then attempt to create a new one and try again
-			if hdr == nil {
+			for hdr == nil {
 				// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
 				newHdr := (*bucketHdr)(newobject(t.bucketdata))
 				// Since we're setting it, may as well attempt to acquire lock

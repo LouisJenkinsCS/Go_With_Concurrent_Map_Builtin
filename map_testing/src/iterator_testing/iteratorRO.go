@@ -4,7 +4,7 @@ import (
     "settings"
 )
 
-func ConcurrentIterator_RO(nGoroutines int) int64 {
+func ConcurrentIterator_RO(nGoroutines int64) int64 {
     cmap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
@@ -13,7 +13,7 @@ func ConcurrentIterator_RO(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             for k, v := range cmap {
                 k++
@@ -23,7 +23,7 @@ func ConcurrentIterator_RO(nGoroutines int) int64 {
     }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
-func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
+func ConcurrentIterator_Interlocked_RO(nGoroutines int64) int64 {
     cmap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
@@ -32,7 +32,7 @@ func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             for k, v := range sync.Interlocked cmap {
                 k++
@@ -42,7 +42,7 @@ func ConcurrentIterator_Interlocked_RO(nGoroutines int) int64 {
     }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
-func DefaultIterator_RO(nGoroutines int) int64 {
+func DefaultIterator_RO(nGoroutines int64) int64 {
     smap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS)
 
     
@@ -52,7 +52,7 @@ func DefaultIterator_RO(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             for k, v := range smap {
                 k++

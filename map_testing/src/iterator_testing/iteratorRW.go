@@ -9,7 +9,7 @@ type T struct {
     iter int
 }
 
-func ConcurrentIterator_RW(nGoroutines int) int64 {
+func ConcurrentIterator_RW(nGoroutines int64) int64 {
     cmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
@@ -18,7 +18,7 @@ func ConcurrentIterator_RW(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             for k, _ := range cmap {
             sync.Interlocked cmap[k] {
@@ -32,7 +32,7 @@ func ConcurrentIterator_RW(nGoroutines int) int64 {
     }).Nanoseconds() / int64(settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
-func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
+func ConcurrentIterator_Interlocked_RW(nGoroutines int64) int64 {
     cmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS, nGoroutines)
     
     // Initialize the map with a fixed number of elements.
@@ -41,7 +41,7 @@ func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             for k, v := range sync.Interlocked cmap {
                 // Does nothing as 'v' is very value, but necessary so it isn't blank; Haven't typechecked blank types correctly
@@ -56,7 +56,7 @@ func ConcurrentIterator_Interlocked_RW(nGoroutines int) int64 {
     }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
-func SynchronizedIterator_RW(nGoroutines int) int64 {
+func SynchronizedIterator_RW(nGoroutines int64) int64 {
     smap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS)
     var mtx sync.Mutex
 
@@ -66,7 +66,7 @@ func SynchronizedIterator_RW(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             // Required to lock before iteration begins... huge bottleneck
             mtx.Lock()
@@ -83,7 +83,7 @@ func SynchronizedIterator_RW(nGoroutines int) int64 {
     }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
-func ReaderWriterIterator_RW(nGoroutines int) int64 {
+func ReaderWriterIterator_RW(nGoroutines int64) int64 {
     rwmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS)
     var mtx sync.RWMutex
 
@@ -93,7 +93,7 @@ func ReaderWriterIterator_RW(nGoroutines int) int64 {
     }
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
             // Required to lock before iteration begins... huge bottleneck, plus no promotion from reader lock to write lock
             mtx.Lock()
@@ -110,7 +110,7 @@ func ReaderWriterIterator_RW(nGoroutines int) int64 {
     }).Nanoseconds() / int64(int64(nGoroutines) * settings.ITERATOR_NUM_ELEMS * int64(settings.ITERATOR_NUM_ITERATIONS))
 }
 
-func ChannelIterator_RW(nGoroutines int) int64 {
+func ChannelIterator_RW(nGoroutines int64) int64 {
     chmap := make(map[int64]T, settings.ITERATOR_NUM_ELEMS)
     ch := make(chan int64, settings.ITERATOR_NUM_ELEMS)
     var done sync.WaitGroup
@@ -144,7 +144,7 @@ func ChannelIterator_RW(nGoroutines int) int64 {
     }()
 
     // Begin iteration test
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         // Note that this is a special case wherein keys are simple integers, hence we are giving the map an unfair advantage here. Since we do not
         // need to iterate the map for all keys, we can generate each key easily in a function, then pass to the channel the keys to be incremented.
         // This is not realistic, however I deem it is necessary to prove how much better the concurrent map is over channels  

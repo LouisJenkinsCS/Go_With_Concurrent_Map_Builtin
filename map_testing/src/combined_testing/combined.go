@@ -8,7 +8,7 @@ import (
     "sync/atomic"
 )
 
-func ConcurrentCombined(nGoroutines int) int64 {
+func ConcurrentCombined(nGoroutines int64) int64 {
     cmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
@@ -20,7 +20,7 @@ func ConcurrentCombined(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
@@ -57,7 +57,7 @@ func ConcurrentCombined(nGoroutines int) int64 {
     }).Nanoseconds() / totalOps
 }
 
-func ConcurrentCombined_Interlocked(nGoroutines int) int64 {
+func ConcurrentCombined_Interlocked(nGoroutines int64) int64 {
     cmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
@@ -69,7 +69,7 @@ func ConcurrentCombined_Interlocked(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
@@ -105,7 +105,7 @@ func ConcurrentCombined_Interlocked(nGoroutines int) int64 {
     }).Nanoseconds() / totalOps
 }
 
-func SynchronizedCombined(nGoroutines int) int64 {
+func SynchronizedCombined(nGoroutines int64) int64 {
     smap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE)
     var mtx sync.Mutex
     
@@ -118,7 +118,7 @@ func SynchronizedCombined(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
@@ -162,7 +162,7 @@ func SynchronizedCombined(nGoroutines int) int64 {
     }).Nanoseconds() / totalOps
 }
 
-func ReaderWriterCombined(nGoroutines int) int64 {
+func ReaderWriterCombined(nGoroutines int64) int64 {
     rwmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE)
     var mtx sync.RWMutex
     
@@ -175,7 +175,7 @@ func ReaderWriterCombined(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 

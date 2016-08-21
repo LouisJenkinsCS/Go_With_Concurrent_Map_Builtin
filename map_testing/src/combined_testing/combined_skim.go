@@ -14,7 +14,7 @@ type T struct {
     _ uintptr    
 }
 
-func ConcurrentCombinedSkim(nGoroutines int) int64 {
+func ConcurrentCombinedSkim(nGoroutines int64) int64 {
     cmap := make(map[int64]T, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
@@ -26,7 +26,7 @@ func ConcurrentCombinedSkim(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
@@ -68,7 +68,7 @@ func ConcurrentCombinedSkim(nGoroutines int) int64 {
     }).Nanoseconds() / totalOps
 }
 
-func ConcurrentCombinedSkim_Interlocked(nGoroutines int) int64 {
+func ConcurrentCombinedSkim_Interlocked(nGoroutines int64) int64 {
     cmap := make(map[int64]T, settings.COMBINED_KEY_RANGE, nGoroutines)
     
     // Fill map to reduce overhead of resizing
@@ -80,7 +80,7 @@ func ConcurrentCombinedSkim_Interlocked(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
@@ -118,7 +118,7 @@ func ConcurrentCombinedSkim_Interlocked(nGoroutines int) int64 {
     }).Nanoseconds() / totalOps
 }
 
-func SynchronizedCombinedSkim(nGoroutines int) int64 {
+func SynchronizedCombinedSkim(nGoroutines int64) int64 {
     smap := make(map[int64]T, settings.COMBINED_KEY_RANGE)
     var mtx sync.Mutex
     
@@ -131,7 +131,7 @@ func SynchronizedCombinedSkim(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
@@ -177,7 +177,7 @@ func SynchronizedCombinedSkim(nGoroutines int) int64 {
     }).Nanoseconds() / totalOps
 }
 
-func ReaderWriterCombinedSkim(nGoroutines int) int64 {
+func ReaderWriterCombinedSkim(nGoroutines int64) int64 {
     rwmap := make(map[int64]T, settings.COMBINED_KEY_RANGE)
     var mtx sync.RWMutex
     
@@ -190,7 +190,7 @@ func ReaderWriterCombinedSkim(nGoroutines int) int64 {
     }
 
     var totalOps int64
-    return settings.ParallelTest(nGoroutines, func() {
+    return settings.ParallelTest(int(nGoroutines), func() {
         var nOps int64
         rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 
