@@ -212,6 +212,8 @@ func walkstmt(n *Node) *Node {
 	default:
 		if n.Op == ONAME {
 			Yyerror("%v is not a top level statement", n.Sym)
+		} else if n.Op == OASWB {
+			return n // Somehow, we end up walking OASWB node, return early.
 		} else {
 			Yyerror("%v is not a top level statement", n.Op)
 		}

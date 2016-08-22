@@ -149,7 +149,7 @@ var stoplist = map[int32]bool{
 	LVAR:      true,
 
 	// L.J: Concurrent Map critical section
-	LINTERLOCKED:	true,
+	LINTERLOCKED: true,
 }
 
 // Advance consumes tokens until it finds a token of the stop- or followlist.
@@ -237,7 +237,7 @@ var tokstrings = map[int32]string{
 	LVAR:       "var",
 
 	// L.J: Concurrent Map critical section
-	LINTERLOCKED:	"sync.Interlocked",
+	LINTERLOCKED: "sync.Interlocked",
 }
 
 // usage: defer p.trace(msg)()
@@ -548,7 +548,7 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 		if p.got(LINTERLOCKED) {
 			isInterlocked = true
 		}
-		
+
 		// LRANGE expr
 		r := Nod(ORANGE, nil, p.expr())
 		r.Etype = 0 // := flag
@@ -991,6 +991,7 @@ func (p *parser) for_stmt() *Node {
 	ExpressionList needs to be concurrent maps
 */
 func (p *parser) interlocked_stmt() *Node {
+	fmt.Println("At interlocked statement...")
 	p.want(LINTERLOCKED)
 	markdcl()
 
@@ -998,7 +999,7 @@ func (p *parser) interlocked_stmt() *Node {
 	p.want('[')
 	key := p.expr()
 	p.want(']')
-	
+
 	// Interlocked node, takes argument in Right, and the body inside it's Nbody
 	stmt := Nod(OINTERLOCKED, nil, nil)
 	stmt.List.Append(map_, key)
@@ -2635,7 +2636,7 @@ func (p *parser) stmt() *Node {
 		}
 
 		return stmt
-	
+
 	// L.J: Concurrent Map critical section
 	case LINTERLOCKED:
 		return p.interlocked_stmt()
