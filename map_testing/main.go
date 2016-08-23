@@ -1,14 +1,14 @@
 package main
 
 import "fmt"
-import "runtime"
 import "intset_testing"
 import "iterator_testing"
 import "combined_testing"
+import "strconv"
+import "strings"
+import "flag"
 
 import "os"
-
-var trials int64 = 3
 
 func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) float64 {
 	nsOp := callback(nGoroutines)
@@ -21,6 +21,7 @@ type benchmarks struct {
 	benchmarks []benchmark
 	fileName   string
 	csvHeader  string
+	info       []benchmarkInfo
 }
 
 type benchmark struct {
@@ -33,6 +34,32 @@ type benchmarkInfo struct {
 	trials      int64
 }
 
+type trialType int64
+type arrayFlags []int64
+
+func (i *trialType) String() string {
+	return "Nothing good"
+}
+
+func (i *trialType) Set(value string) error {
+	v, _ := strconv.ParseInt(value, 10, 64)
+	*i = trialType(v)
+	return nil
+}
+
+func (i *arrayFlags) String() string {
+	return "my string representation"
+}
+
+func (i *arrayFlags) Set(value string) error {
+	str := strings.Split(value, ",")
+	for _, s := range str {
+		v, _ := strconv.ParseInt(s, 10, 64)
+		*i = append(*i, v)
+	}
+	return nil
+}
+
 func runBenchmark(barr []benchmarks) {
 	for _, bm := range barr {
 		// Open file for benchmarks
@@ -43,13 +70,10 @@ func runBenchmark(barr []benchmarks) {
 
 		fmt.Printf("Benchmark: %v\n", bm.csvHeader)
 
-		// nGoroutines are from [1...N] where N is the number of logical CPU's next power of two
-		nGoroutines := int64(runtime.NumCPU() + 1)
-
 		// Header
 		file.WriteString(bm.csvHeader)
-		for i := int64(1); i < nGoroutines; i++ {
-			file.WriteString(fmt.Sprintf(",%v", i))
+		for _, info := range bm.info {
+			file.WriteString(fmt.Sprintf(",%v", info.nGoroutines))
 		}
 		file.WriteString("\n")
 
@@ -58,19 +82,23 @@ func runBenchmark(barr []benchmarks) {
 			// Name of row
 			file.WriteString(b.rowName)
 			fmt.Printf("Section: %v\n", b.rowName)
+			// Run the benchmark for all Goroutines and trials.
+			for _, info := range bm.info {
+				nGoroutines := info.nGoroutines
+				fmt.Printf("Goroutines: %v\n", nGoroutines)
 
-			for nGoroutine := int64(1); nGoroutine <= nGoroutines; nGoroutine++ {
+				// Keep track of all benchmark results, as we'll be taking the average after all trials are ran.
 				nsPerOp := int64(0)
-				fmt.Printf("Goroutines: %v\n", nGoroutine)
-				for trial := int64(1); trial <= trials; trial++ {
-					fmt.Printf("\rTrial %v/%v", trial, trials)
-					nsPerOp += b.callback(nGoroutine)
-					fmt.Printf("\tns/op: %v", nsPerOp/trial)
+
+				for i := int64(0); i < info.trials; i++ {
+					fmt.Printf("\rTrial %v/%v", i+1, info.trials)
+					nsPerOp += b.callback(nGoroutines)
+					fmt.Printf("\tns/op: %v", nsPerOp/(i+1))
 				}
 				fmt.Println()
 
 				// Average then convert to Million Operations per Second
-				nsPerOp /= trials
+				nsPerOp /= info.trials
 				OPS := float64(1000000000) / float64(nsPerOp)
 				MOPS := OPS / float64(1000000)
 
@@ -85,6 +113,26 @@ func runBenchmark(barr []benchmarks) {
 }
 
 func main() {
+	var f arrayFlags
+	var trials trialType
+	flag.Var(&f, "nGoroutines", "Number of Goroutines to run the tests with; comma-separated")
+	flag.Var(&trials, "nTrials", "Number of trials each benchmark is ran; we take the average")
+	flag.Parse()
+
+	// No arguments passed? Use default
+	if len(f) == 0 {
+		f = arrayFlags([]int64{1, 2, 4, 8, 16, 32})
+	}
+
+	if trials == trialType(0) {
+		trials = trialType(3)
+	}
+
+	var info []benchmarkInfo
+	for _, goroutines := range f {
+		info = append(info, benchmarkInfo{goroutines, int64(trials)})
+	}
+
 	benchmarks := []benchmarks{
 		// Intset
 		benchmarks{
@@ -104,6 +152,7 @@ func main() {
 			},
 			"intset.csv",
 			"intset",
+			info,
 		},
 		// Read-Only Iterator
 		benchmarks{
@@ -119,6 +168,7 @@ func main() {
 			},
 			"iteratorRO.csv",
 			"iteratorRO",
+			info,
 		},
 		// Read-Write Iterator
 		benchmarks{
@@ -138,6 +188,7 @@ func main() {
 			},
 			"iteratorRW.csv",
 			"iteratorRW",
+			info,
 		},
 		// Combined
 		benchmarks{
@@ -161,6 +212,7 @@ func main() {
 			},
 			"combined.csv",
 			"combined",
+			info,
 		},
 		// Combined - Skim
 		benchmarks{
@@ -184,6 +236,7 @@ func main() {
 			},
 			"combinedSkim.csv",
 			"combinedSkim",
+			info,
 		},
 	}
 
