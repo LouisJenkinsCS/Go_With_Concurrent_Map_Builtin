@@ -1,4 +1,3 @@
-iteratorRW,1,2,4,8,16,32
-Concurrent Map (Interlocked),16.95,29.41,52.63,71.43,71.43,71.43
-Synchronized Map (Mutex),19.23,18.87,18.52,17.86,17.86,17.54
-ReaderWriter Map (RWMutex),18.52,17.86,17.54,17.54
+iteratorRW,1,2,4,8
+Concurrent Map,13.51,23.81,45.45,58.82
+Synchronized Map (Mutex),18.87,18.18,17.54

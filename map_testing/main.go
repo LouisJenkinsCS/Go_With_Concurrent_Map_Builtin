@@ -158,8 +158,8 @@ func main() {
 		benchmarks{
 			[]benchmark{
 				benchmark{
-					iterator_testing.ConcurrentIterator_Interlocked_RO,
-					"Concurrent Map (Interlocked)",
+					iterator_testing.ConcurrentIterator_RO,
+					"Concurrent Map",
 				},
 				benchmark{
 					iterator_testing.DefaultIterator_RO,
@@ -174,8 +174,8 @@ func main() {
 		benchmarks{
 			[]benchmark{
 				benchmark{
-					iterator_testing.ConcurrentIterator_Interlocked_RW,
-					"Concurrent Map (Interlocked)",
+					iterator_testing.ConcurrentIterator_RW,
+					"Concurrent Map",
 				},
 				benchmark{
 					iterator_testing.SynchronizedIterator_RW,
@@ -198,10 +198,6 @@ func main() {
 					"Concurrent Map",
 				},
 				benchmark{
-					combined_testing.ConcurrentCombined_Interlocked,
-					"Concurrent Map (Interlocked)",
-				},
-				benchmark{
 					combined_testing.SynchronizedCombined,
 					"Synchronized Map (Mutex)",
 				},
@@ -220,10 +216,6 @@ func main() {
 				benchmark{
 					combined_testing.ConcurrentCombinedSkim,
 					"Concurrent Map",
-				},
-				benchmark{
-					combined_testing.ConcurrentCombinedSkim_Interlocked,
-					"Concurrent Map (Interlocked)",
 				},
 				benchmark{
 					combined_testing.SynchronizedCombinedSkim,

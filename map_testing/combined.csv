@@ -1,3 +1,2 @@
-combined,1,2,4,8,16,32
-Concurrent Map,19.23,34.48,62.50,90.91,90.91,90.91
-Concurrent Map (Interlocked),18.87,33.33
+combined,1,2,4,8
+Concurrent Map,18.18,32.26

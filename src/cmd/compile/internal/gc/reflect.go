@@ -283,12 +283,13 @@ func interlockedInfo(t *Type) *Type {
 	info := typ(TSTRUCT)
 	info.Noalg = true
 
-	var field [5]*Field
-	field[0] = makefield("hdr", Ptrto(bucketHdr(t)))
-	field[1] = makefield("key", Types[TUNSAFEPTR])
-	field[2] = makefield("value", Types[TUNSAFEPTR])
-	field[3] = makefield("hash", Ptrto(Types[TUINTPTR]))
-	field[4] = makefield("flags", Types[TUINTPTR])
+	var field [6]*Field
+	field[0] = makefield("cmap", Types[TUNSAFEPTR])
+	field[1] = makefield("hdr", Ptrto(bucketHdr(t)))
+	field[2] = makefield("key", Types[TUNSAFEPTR])
+	field[3] = makefield("value", Types[TUNSAFEPTR])
+	field[4] = makefield("hash", Ptrto(Types[TUINTPTR]))
+	field[5] = makefield("flags", Types[TUINTPTR])
 
 	info.SetFields(field[:])
 	dowidth(info)

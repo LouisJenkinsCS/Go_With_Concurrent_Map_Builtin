@@ -147,9 +147,6 @@ var stoplist = map[int32]bool{
 	LSWITCH:   true,
 	LTYPE:     true,
 	LVAR:      true,
-
-	// L.J: Concurrent Map critical section
-	LINTERLOCKED: true,
 }
 
 // Advance consumes tokens until it finds a token of the stop- or followlist.
@@ -235,9 +232,6 @@ var tokstrings = map[int32]string{
 	LSWITCH:    "switch",
 	LTYPE:      "type",
 	LVAR:       "var",
-
-	// L.J: Concurrent Map critical section
-	LINTERLOCKED: "sync.Interlocked",
 }
 
 // usage: defer p.trace(msg)()
@@ -543,18 +537,10 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 	}
 
 	if rangeOk && p.got(LRANGE) {
-		isInterlocked := false
-
-		if p.got(LINTERLOCKED) {
-			isInterlocked = true
-		}
 
 		// LRANGE expr
 		r := Nod(ORANGE, nil, p.expr())
 		r.Etype = 0 // := flag
-		if isInterlocked {
-			r.flags |= isInterlockedRange
-		}
 		return r
 	}
 
@@ -621,19 +607,11 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 	case '=':
 		p.next()
 		if rangeOk && p.got(LRANGE) {
-			isInterlocked := false
-
-			if p.got(LINTERLOCKED) {
-				isInterlocked = true
-			}
 
 			// expr_list '=' LRANGE expr
 			r := Nod(ORANGE, nil, p.expr())
 			r.List.Set(lhs)
 			r.Etype = 0 // := flag
-			if isInterlocked {
-				r.flags |= isInterlockedRange
-			}
 			return r
 		}
 
@@ -655,20 +633,12 @@ func (p *parser) simple_stmt(labelOk, rangeOk bool) *Node {
 		p.next()
 
 		if rangeOk && p.got(LRANGE) {
-			isInterlocked := false
-
-			if p.got(LINTERLOCKED) {
-				isInterlocked = true
-			}
 
 			// expr_list LCOLAS LRANGE expr
 			r := Nod(ORANGE, nil, p.expr())
 			r.List.Set(lhs)
 			r.Colas = true
 			colasdefn(lhs, r)
-			if isInterlocked {
-				r.flags |= isInterlockedRange
-			}
 			return r
 		}
 
@@ -983,35 +953,6 @@ func (p *parser) for_stmt() *Node {
 	popdcl()
 
 	return body
-}
-
-/*
-	Interlocked = "sync.Interlocked" Expr Block .
-
-	ExpressionList needs to be concurrent maps
-*/
-func (p *parser) interlocked_stmt() *Node {
-	p.want(LINTERLOCKED)
-	markdcl()
-
-	map_ := p.name()
-	p.want('[')
-	key := p.expr()
-	p.want(']')
-
-	// Interlocked node, takes argument in Right, and the body inside it's Nbody
-	stmt := Nod(OINTERLOCKED, nil, nil)
-	stmt.List.Append(map_, key)
-
-	// Obtain the body
-	p.want('{')
-	body := p.stmt_list()
-	p.want('}')
-
-	// Add body to OINTERLOCKED
-	stmt.Nbody.Append(body...)
-	popdcl()
-	return stmt
 }
 
 // header parses a combination of if, switch, and for statement headers:
@@ -2635,10 +2576,6 @@ func (p *parser) stmt() *Node {
 		}
 
 		return stmt
-
-	// L.J: Concurrent Map critical section
-	case LINTERLOCKED:
-		return p.interlocked_stmt()
 
 	case ';':
 		return nil

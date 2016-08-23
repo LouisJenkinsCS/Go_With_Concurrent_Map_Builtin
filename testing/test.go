@@ -67,7 +67,7 @@ func main() {
 		go func() {
 			iterations := 0
 			start.Wait()
-			for k, v := range sync.Interlocked m {
+			for k, v := range m {
 				v.iter++
 				t := m[k]
 				t.iter = t.iter + 1

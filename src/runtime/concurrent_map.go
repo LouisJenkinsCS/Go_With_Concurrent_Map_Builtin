@@ -273,8 +273,6 @@ type concurrentIterator struct {
 	startIdx []uint32
 	// Cached 'g' for faster access
 	g *g
-	// If this is snapshot iteration, this is a pointer to bucketData, and if it is interlocked iteration this is a pointer to interlockedInfo
-	data unsafe.Pointer
 	// Slice of all buckets we skip over due to not being able to acquire the lock fast enough (and reduce overall convoying).
 	skippedBuckets []*bucketHdr
 }
@@ -389,19 +387,20 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
 	it.h = h
 
 	cmap := (*concurrentMap)(h.chdr)
-	root := &cmap.root
+	arr := &cmap.root
 	citer := (*concurrentIterator)(newobject(t.concurrentiterator))
 	it.citerHdr = unsafe.Pointer(citer)
-	citer.arr = root
-
-	// The 'data' field is initialized to a *bucketData
-	citer.data = newobject(t.bucketdata)
-
-	// Cache the 'g' and used during locking
-	citer.g = getg()
+	citer.arr = arr
 
 	// By setting offset to MAX_SLOTS, it allows it to bypass the findKeyValue portion without modification
 	citer.offset = MAX_SLOTS
+
+	// Push a new interlockedInfo on the 'g's stack, and cache it for faster access
+	g := getg()
+	data := (*interlockedInfo)(newobject(t.interlockedinfo))
+	data.cmap = h.chdr
+	g.interlockedData = append(g.interlockedData, data)
+	citer.g = g
 
 	// Randomized root start index is a random prime, modulo the number of root buckets
 	rootStartIdx := uint32(primes[fastrand1()%uint32(len(primes))] % DEFAULT_BUCKETS)
@@ -413,352 +412,13 @@ func cmapiterinit(t *maptype, h *hmap, it *hiter) {
 }
 
 /*
-	Interlocked iteration initialization. Called at the beginning of iteration to setup the iterator. Starts at a randomized
-	position.
-*/
-func cmapiterinit_interlocked(t *maptype, h *hmap, it *hiter) {
-	// Clear pointer fields so garbage collector does not complain.
-	it.key = nil
-	it.value = nil
-	it.t = nil
-	it.h = nil
-	it.buckets = nil
-	it.bptr = nil
-	it.overflow[0] = nil
-	it.overflow[1] = nil
-	it.citerHdr = nil
-
-	// You cannot iterate a nil or empty map
-	if h == nil || atomic.Load((*uint32)(unsafe.Pointer(&h.count))) == 0 {
-		it.key = nil
-		it.value = nil
-		return
-	}
-
-	it.t = t
-	it.h = h
-
-	cmap := (*concurrentMap)(h.chdr)
-	arr := &cmap.root
-	citer := (*concurrentIterator)(newobject(t.concurrentiterator))
-	it.citerHdr = unsafe.Pointer(citer)
-	citer.arr = arr
-
-	// By setting offset to MAX_SLOTS, it allows it to bypass the findKeyValue portion without modification
-	citer.offset = MAX_SLOTS
-
-	// Cache the 'g' and used during locking
-	citer.g = getg()
-
-	// Randomized root start index is a random prime, modulo the number of root buckets
-	rootStartIdx := uint32(primes[fastrand1()%uint32(len(primes))] % DEFAULT_BUCKETS)
-	citer.startIdx = make([]uint32, 1)
-	citer.startIdx[0] = rootStartIdx
-	citer.idx = uint32((rootStartIdx + 1) % DEFAULT_BUCKETS)
-
-	// Create the storage for interlocked iteration information
-	citer.data = newobject(t.interlockedinfo)
-
-	cmapiternext_interlocked(it)
-}
-
-/*
-	Atomic snapshot iteration
+	Interlocked iteration
 
 	for key, value := range map {
 		// ...
 	}
 */
 func cmapiternext(it *hiter) {
-	var hdr *bucketHdr
-	var key, value unsafe.Pointer
-	var backoff, spins int64
-	var idx, offset, startIdx uint32
-
-	citer := (*concurrentIterator)(it.citerHdr)
-	data := (*bucketData)(citer.data)
-	t := it.t
-	g := citer.g
-	gptr := uintptr(unsafe.Pointer(g))
-
-	// Find the next key-value element. It assumes that if citer.offset < MAX_SLOTS, that citer.data actually holds valid information.
-	// This is jumped to during iteration when we find and make a snapshot of the bucket we need, and are iterating through it to find
-	// the next element.
-findKeyValue:
-	offset = citer.offset
-	citer.offset++
-
-	// If there is more to find, do so
-	if offset < MAX_SLOTS {
-		// If this cell is empty, loop again
-		if data.hash[offset] == EMPTY {
-			goto findKeyValue
-		}
-
-		// The key and values are present, but perform necessary indirection
-		key = data.key(t, uintptr(offset))
-		if t.indirectkey {
-			key = *(*unsafe.Pointer)(key)
-		}
-		value = data.value(t, uintptr(offset))
-		if t.indirectvalue {
-			value = *(*unsafe.Pointer)(value)
-		}
-
-		// Set the iterator's data and we're done
-		it.key = key
-		it.value = value
-		return
-	}
-
-	// If the offset == MAX_SLOTS, then we exhausted this bucketData, reset offset for next one
-	citer.offset = 0
-
-	// Find the next bucketData snapshot if there is one.
-next:
-	startIdx = citer.startIdx[len(citer.startIdx)-1]
-	idx = citer.idx
-
-	// If we have WRAPPED around the bucketArray, we are finished iterating it.
-	if startIdx == WRAPPED {
-		// We are not at the root, so go back one.
-		if citer.depth > 0 {
-			// Go back one
-			citer.idx = citer.arr.parentIdx
-			citer.arr = citer.arr.parent
-
-			// Increment idx by one to move on to next bucketHdr
-			citer.idx++
-
-			citer.depth--
-			citer.startIdx = citer.startIdx[:len(citer.startIdx)-1]
-
-			goto next
-		} else {
-			// This is the root, so we have no more to process; check any skipped buckets.
-			goto pollSkippedBuckets
-		}
-	} else if idx == startIdx {
-		// At this point, we are on the last bucket in this bucketArray and have already wrapped around
-		// Flag it so we don't continue after we are finished processing this bucket
-		citer.startIdx[len(citer.startIdx)-1] = WRAPPED
-	} else if idx == uint32(len(citer.arr.buckets)) {
-		// At this point, we hit the last cell in the bucketArray but have not wrapped yet
-		citer.idx = 0
-		// In the case citer.startIdx == 0, it would proceed to process it as if it wasn't the last bucket.
-		// Hence we must jump back to next.
-		goto next
-	}
-
-	// At this point, we know that idx != startIdx and idx is in bounds of the slice.
-
-	// Obtain header (and forward index by one for next iteration)
-	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
-	citer.idx++
-
-	// Read ahead of time if we should skip to the next. Any cold cache-misses should be resolved here as well.
-	if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
-		goto next
-	}
-
-	for {
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
-
-		lock := atomic.Loaduintptr(&hdr.lock)
-
-		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
-		if lock == INVALID {
-			// Reload hdr, since what it was pointed to has changed
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
-			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all).
-			// hdr.count == 0 iff another Goroutine has created a new bucketData during a 'mapassign' but has not yet finished it's assignment.
-			// In this case, there's still nothing here for us.
-			if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
-				goto next
-			}
-			// Loop again.
-			continue
-		}
-
-		// If it's recursive, recurse and find new bucket (Note we also ensure we start a randomized start position)
-		if lock == ARRAY {
-			citer.arr = (*bucketArray)(unsafe.Pointer(hdr))
-
-			size := len(citer.arr.buckets)
-			randStart := uint32(primes[fastrand1()%uint32(len(primes))] % size)
-			citer.startIdx = append(citer.startIdx, randStart)
-			citer.idx = uint32((randStart + 1) % uint32(size))
-
-			citer.depth++
-
-			goto next
-		}
-
-		// Acquire lock on bucket
-		if lock == UNLOCKED {
-			// Attempt to acquire
-			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				break
-			}
-			continue
-		}
-
-		// If we already own the lock, then we're iterating while in a sync.Interlocked block, which is forbidden (Don't know how we got here then)
-		if lock == gptr {
-			println("...g # ", g.goid, ": Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
-			break
-		}
-
-		// Keep track of the current lock-holder
-		holder := lock & LOCKED_MASK
-
-		// Tight-spin until the current lock-holder releases lock
-		for {
-			if spins < GOSCHED_AFTER_SPINS {
-				procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-			} else if spins < SLEEP_AFTER_SPINS {
-				Gosched()
-			} else {
-				// During iteration, we do not backoff to reduce the effects of lock convoying. Instead if after
-				// a busy-wait spin, we skip this bucket and process it later.
-				citer.skippedBuckets = append(citer.skippedBuckets, hdr)
-				goto next
-			}
-			spins++
-
-			// We test the lock on each iteration
-			lock = atomic.Loaduintptr(&hdr.lock)
-			// If the previous lock-holder released the lock, attempt to acquire again.
-			if lock != holder {
-				if spins > 20 {
-					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-				}
-				break
-			}
-		}
-	}
-
-	// Atomic snapshot of the bucketData
-	typedmemmove(t.bucketdata, citer.data, unsafe.Pointer(hdr))
-
-	// Release lock
-	atomic.Storeuintptr(&hdr.lock, UNLOCKED)
-
-	// We have the snapshot we want.
-	goto findKeyValue
-
-	// Called to poll thorugh any skipped buckets
-pollSkippedBuckets:
-	// Reset backoff variables
-	spins = 0
-	backoff = DEFAULT_BACKOFF
-
-	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
-	for {
-		// Since we cannot remove the processed buckets, we need to ensure that we are actually doing work.
-		// If we find all nil buckets, we are finished.
-		doneProcessing := true
-		for idx, hdr := range citer.skippedBuckets {
-			// If the pointer is nil, we already processed it,
-			if hdr == nil {
-				continue
-			}
-
-			lock := atomic.Loaduintptr(&hdr.lock)
-
-			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
-			if lock == INVALID {
-				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
-				doneProcessing = false
-				continue
-			}
-
-			// There is no data here (yet), dispose of it.
-			if atomic.Loaduintptr(&hdr.count) == 0 {
-				citer.skippedBuckets[idx] = nil
-				continue
-			}
-
-			// In the easier case wherein the hdr has ARRAY bit flagged, we can allow 'next' label to take care of it.
-			// Randomize start iteration as well.
-			if lock == ARRAY {
-				citer.arr = (*bucketArray)(unsafe.Pointer(hdr))
-
-				// Randomize start position
-				size := len(citer.arr.buckets)
-				randStart := uint32(primes[fastrand1()%uint32(len(primes))] % size)
-				citer.startIdx = append(citer.startIdx, randStart)
-				citer.idx = uint32((randStart + 1) % uint32(size))
-
-				// We are processing it, so make sure we nil it out.
-				citer.skippedBuckets[idx] = nil
-
-				goto next
-			}
-
-			// In this case, we know that lock is not invalid (yet) nor is it ARRAY (yet), so we do a simple test for if it is UNLOCKED.
-			// Once again, this is polling, so we don't do a tight spin or anything else either.
-			if lock == UNLOCKED {
-				// Test-And-Set
-				if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-					// If we successfully acquire this, make a snapshot and start processing it.
-					typedmemmove(t.bucketdata, citer.data, unsafe.Pointer(hdr))
-
-					// Release lock
-					atomic.Storeuintptr(&hdr.lock, UNLOCKED)
-
-					// We are processing this hdr, so nil it out
-					citer.skippedBuckets[idx] = nil
-
-					// Begin processing the snapshot
-					goto findKeyValue
-				}
-			}
-
-			if lock == gptr {
-				throw("Unexpected: lock == gptr, iterated over a skipped bucket we currently own!!!")
-			}
-
-			// At this point, this bucket cannot be processed yet
-			doneProcessing = false
-		}
-
-		// If we haven't found at least one non-processed bucket, we're done.
-		if doneProcessing {
-			break
-		}
-
-		// Handle polliing over buckets with some backoff.
-		if spins < GOSCHED_AFTER_SPINS {
-			procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-		} else if spins < SLEEP_AFTER_SPINS {
-			Gosched()
-		} else {
-			timeSleep(backoff)
-
-			// ≈1ms
-			if backoff < MAX_BACKOFF {
-				backoff *= 2
-			}
-		}
-		spins++
-	}
-
-	// If we make it this far, we've processed everything.
-	it.key = nil
-	it.value = nil
-}
-
-/*
-	Interlocked iteration
-
-	for key, value := range sync.Interlocked map {
-		// ...
-	}
-*/
-func cmapiternext_interlocked(it *hiter) {
 	var data *bucketData
 	var hdr *bucketHdr
 	var key, value unsafe.Pointer
@@ -766,7 +426,7 @@ func cmapiternext_interlocked(it *hiter) {
 	var idx, offset, startIdx uint32
 
 	citer := (*concurrentIterator)(it.citerHdr)
-	info := (*interlockedInfo)(citer.data)
+	info := (*interlockedInfo)(citer.g.interlockedData[len(citer.g.interlockedData)-1])
 	t := it.t
 	g := citer.g
 	gptr := uintptr(unsafe.Pointer(g))
@@ -948,9 +608,9 @@ next:
 			continue
 		}
 
-		// If we already own the lock, then we're iterating while in a sync.Interlocked block, which is forbidden (Don't know how we got here then)
+		// If we already own the lock, then we somehow forget to release the lock and the map is in a bad state.
 		if lock == gptr {
-			println("...g # ", g.goid, ": Recursive-owned lock while iterating forbidden!Potential iteration while sync.Interlocked?")
+			throw("Unexpected: Discovered already-owned lock while iterating...")
 			break
 		}
 
@@ -1083,6 +743,9 @@ pollSkippedBuckets:
 	// If we make it this far, we've processed everything.
 	it.key = nil
 	it.value = nil
+
+	// Pop our info off the stack.
+	g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
 }
 
 /*
@@ -1168,12 +831,21 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrenc
 func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 	// g := getg().m.curg
 	// println("g #", getg().goid, ": cmapassign1")
+
+	g := getg()
+	// If we are currently interlocked on this map, take the fast path.
+	for _, info := range g.interlockedData {
+		if info.cmap == h.chdr {
+			cmapassign_interlocked(t, info, h, key, val)
+			return
+		}
+	}
+
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
 	var hash, idx, spins uintptr
 	var backoff int64
 	var hdr *bucketHdr
-	g := getg()
 	gptr := uintptr(unsafe.Pointer(g))
 	// println("Root length:", len(arr.buckets))
 
@@ -1183,6 +855,7 @@ next:
 	hash = t.key.alg.hash(key, uintptr(arr.seed))
 	idx = hash % uintptr(len(arr.buckets))
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+	setByUs := false
 
 	// If hdr is nil, then no bucketData has been created yet. Do a wait-free creation of bucketData;
 	for hdr == nil {
@@ -1198,6 +871,7 @@ next:
 			g.releaseBucket = unsafe.Pointer(newHdr)
 			// Also increment count of buckets
 			atomic.Xadduintptr(&arr.count, 1)
+			setByUs = true
 		}
 		// Reload hdr
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
@@ -1205,6 +879,10 @@ next:
 
 	// Attempt to acquire lock
 	for {
+		// If we set the lock, we skip the locking part all together
+		if setByUs {
+			break
+		}
 		// Reset backoff variables
 		spins = 0
 		backoff = DEFAULT_BACKOFF
@@ -1229,6 +907,7 @@ next:
 					g.releaseBucket = unsafe.Pointer(newHdr)
 					// Also increment count of buckets
 					atomic.Xadduintptr(&arr.count, 1)
+					setByUs = true
 				}
 				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 			}
@@ -1244,9 +923,9 @@ next:
 			goto next
 		}
 
-		// If we hold the lock
+		// If we hold the lock, something went wrong
 		if lock == gptr {
-			break
+			throw("Reacquired lock on bucket we currently own: Failed invariant!")
 		}
 
 		// If the lock is uncontested
@@ -1315,8 +994,6 @@ next:
 			}
 		}
 	}
-
-	g.releaseDepth++
 
 	data := (*bucketData)(unsafe.Pointer(hdr))
 	firstEmpty := -1
@@ -1419,7 +1096,6 @@ next:
 		// Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for our current key-value.
 		// In this case try again, to reduce contention and increase concurrency over the lock
 		arr = newArr
-		g.releaseDepth = 0
 		g.releaseBucket = nil
 
 		goto next
@@ -1447,13 +1123,9 @@ func maprelease() {
 		// println("g #", g.goid, ": released lock")
 		hdr := (*bucketHdr)(g.releaseBucket)
 
-		g.releaseDepth--
-		if g.releaseDepth == 0 {
-			atomic.Storeuintptr(&hdr.lock, UNLOCKED)
-			// println("...g # ", g.goid, ": Released lock")
+		atomic.Storeuintptr(&hdr.lock, UNLOCKED)
 
-			g.releaseBucket = nil
-		}
+		g.releaseBucket = nil
 
 	}
 }
@@ -1464,12 +1136,20 @@ func maprelease() {
 	value := map[key]
 */
 func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsafe.Pointer) bool) (unsafe.Pointer, bool) {
+	g := getg()
+
+	// If we are currently interlocked on this map, take the fast path.
+	for _, info := range g.interlockedData {
+		if info.cmap == h.chdr {
+			return cmapaccess_interlocked(t, info, h, key, equal)
+		}
+	}
+
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
 	var hash, idx, spins uintptr
 	var backoff int64
 	var hdr *bucketHdr
-	g := getg()
 	gptr := uintptr(unsafe.Pointer(g))
 
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
@@ -1515,7 +1195,7 @@ next:
 
 		// If we hold the lock
 		if lock == gptr {
-			break
+			throw("Reacquired lock on bucket we currently own: Failed invariant!")
 		}
 
 		// If the lock is uncontested
@@ -1583,8 +1263,6 @@ next:
 			}
 		}
 	}
-
-	g.releaseDepth++
 
 	data := (*bucketData)(unsafe.Pointer(hdr))
 
@@ -1709,14 +1387,20 @@ func cmapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	delete(map, key)
 */
 func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
-	// g := getg().m.curg
-	// println("g #", getg().goid, ": cmapdelete")
+	// If we are currently interlocked on this map, take the fast path.
+	g := getg()
+	for _, info := range g.interlockedData {
+		if info.cmap == h.chdr {
+			cmapdelete_interlocked(t, info, h, key)
+			return
+		}
+	}
+
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
 	var hash, idx, spins uintptr
 	var backoff int64
 	var hdr *bucketHdr
-	g := getg()
 	gptr := uintptr(unsafe.Pointer(g))
 
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
@@ -1831,8 +1515,6 @@ next:
 		}
 	}
 
-	g.releaseDepth++
-
 	data := (*bucketData)(unsafe.Pointer(hdr))
 
 	// TODO: Document
@@ -1873,7 +1555,6 @@ next:
 		// arr.buckets[idx] = nil
 		atomic.Storeuintptr(&hdr.lock, INVALID)
 		g.releaseBucket = nil
-		g.releaseDepth = 0
 
 		// Also decrement number of buckets
 		atomic.Xadduintptr(&arr.count, ^uintptr(0))
@@ -2446,5 +2127,6 @@ func maprelease_interlocked(t *maptype, info *interlockedInfo, h *hmap) {
 	}
 */
 func cmapiterinfo(it *hiter) *interlockedInfo {
-	return (*interlockedInfo)((*concurrentIterator)(it.citerHdr).data)
+	throw("Should not have gotten here!!!")
+	return nil
 }

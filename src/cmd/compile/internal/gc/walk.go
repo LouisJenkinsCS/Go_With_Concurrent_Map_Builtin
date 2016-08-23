@@ -11,23 +11,6 @@ import (
 	"strings"
 )
 
-/*
-	L.J:
-		The sync.Interlocked specific node which is used to determine the appropriate map and key is being interlocked
-*/
-type interlockedNode struct {
-	// The map that is currently interlocked
-	map_ *Node
-	// The pointer to the runtime.interlockedInfo we are passing to map functions
-	info *Node
-}
-
-/*
-	L.J:
-		TODO: Document
-*/
-var interlockedStack []*interlockedNode
-
 // The constant is known to runtime.
 const (
 	tmpstringbufsize = 32
@@ -38,31 +21,6 @@ const immediateRelease = 1 << 0
 
 // State of whether or not we should append an automatic release
 var releaseFlags int
-
-// Determines if a particular map function should be interlocked.
-func isInterlockedMapFunction(n *Node) (*Node, bool) {
-	// If the stack is 0, then we are not even in a sync.Interlocked scope
-	if len(interlockedStack) == 0 {
-		return nil, false
-	}
-
-	// Check if the map can successful
-	for _, info := range interlockedStack {
-		// Occurs when the map is reference in the same scope, or in a nested scoped
-		if info.map_ == n || info.map_ == n.Name.Defn {
-			return info.info, true
-		}
-
-		// Otherwise, check for the special case of range iteration; map is assigned to a temporary
-		if n.Name.Defn != nil && n.Name.Defn.Right == info.map_ {
-			return info.info, true
-		}
-
-		// TODO: Add a runtime-check fallback as well...
-	}
-
-	return nil, false
-}
 
 // L.J: Injected call to release the bucketHdr
 func concurrentMapRelease(init *Nodes) *Node {
@@ -337,37 +295,6 @@ func walkstmt(n *Node) *Node {
 		n.Left = walkexpr(n.Left, &n.Ninit)
 		walkstmtlist(n.Nbody.Slice())
 		walkstmtlist(n.Rlist.Slice())
-
-	case OINTERLOCKED:
-		n.Left = walkexpr(n.Left, &n.Ninit)
-		walkexprlist(n.List.Slice(), &n.Ninit)
-
-		map_ := n.List.First()
-		key := n.List.Second()
-		map_ = walkexpr(map_, &n.Ninit)
-		key = walkexpr(key, &n.Ninit)
-		t := map_.Type
-
-		var newBody []*Node
-		tmpKey := temp(t.MapType().Key)
-		tmpAddr := Nod(OADDR, tmpKey, nil)
-		tmpAddr.Ninit.Append(typecheck(Nod(OAS, tmpKey, key), Etop))
-		tmpAddr = typecheck(tmpAddr, Erv)
-
-		fn := syslook("mapacquire")
-		fn = substArgTypes(fn, t.Key(), t.Val(), t.Key(), interlockedInfo(t))
-		fn = mkcall1(fn, Ptrto(interlockedInfo(t)), &n.Ninit, typename(t), map_, tmpAddr)
-		info := fn
-		interlockedStack = append(interlockedStack, &interlockedNode{map_, info})
-		newBody = append(newBody, n.Nbody.Slice()...)
-		fn = syslook("maprelease_interlocked")
-		fn = substArgTypes(fn, interlockedInfo(t), t.Key(), t.Val())
-		newBody = append(newBody, mkcall1(fn, nil, &n.Ninit, typename(t), info, map_))
-		n.Nbody.Set(newBody)
-		walkstmtlist(n.Nbody.Slice())
-
-		// Pop off interlockedInfo from stack
-		interlockedStack = interlockedStack[:len(interlockedStack)-1]
 
 	case OPROC:
 		switch n.Left.Op {
@@ -950,18 +877,14 @@ opswitch:
 		r.Right = walkexpr(r.Right, init)
 		t := r.Left.Type
 		p := ""
-		cfn := ""
 		if t.Val().Width <= 128 { // Check ../../runtime/hashmap.go:maxValueSize before changing.
 			switch algtype(t.Key()) {
 			case AMEM32:
 				p = "mapaccess2_fast32"
-				cfn = "cmapaccess2_fast32_interlocked"
 			case AMEM64:
 				p = "mapaccess2_fast64"
-				cfn = "cmapaccess2_fast64_interlocked"
 			case ASTRING:
 				p = "mapaccess2_faststr"
-				cfn = "cmapaccess2_faststr_interlocked"
 			}
 		}
 
@@ -975,7 +898,6 @@ opswitch:
 			key = Nod(OADDR, r.Right, nil)
 
 			p = "mapaccess2"
-			cfn = "cmapaccess2_interlocked"
 		}
 
 		// from:
@@ -985,21 +907,13 @@ opswitch:
 		//   a = *var
 		a := n.List.First()
 
-		// Mapaccess inside of sync.Interlocked uses cached version
-		if info, ok := isInterlockedMapFunction(n.Left); ok {
-			fn := syslook(cfn)
-			fn = substArgTypes(fn, interlockedInfo(t), t.Key(), t.Val(), t.Key(), t.Val())
-			r = mkcall1(fn, Ptrto(t.Val()), init, typename(t), info, n.Left, key)
-			// TODO: Support FAT types
+		if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
+			fn := mapfn(p, t)
+			r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key)
 		} else {
-			if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
-				fn := mapfn(p, t)
-				r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key)
-			} else {
-				fn := mapfn("mapaccess2_fat", t)
-				z := zeroaddr(w)
-				r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key, z)
-			}
+			fn := mapfn("mapaccess2_fat", t)
+			z := zeroaddr(w)
+			r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key, z)
 		}
 
 		// mapaccess2* returns a typed bool, but due to spec changes,
@@ -1041,13 +955,7 @@ opswitch:
 		key = Nod(OADDR, key, nil)
 
 		t := map_.Type
-		if info, ok := isInterlockedMapFunction(map_); ok {
-			fn := syslook("cmapdelete_interlocked")
-			fn = substArgTypes(fn, interlockedInfo(t), t.Key(), t.Val(), t.Key())
-			n = mkcall1(fn, nil, init, typename(t), info, map_, key)
-		} else {
-			n = mkcall1(mapfndel("mapdelete", t), nil, init, typename(t), map_, key)
-		}
+		n = mkcall1(mapfndel("mapdelete", t), nil, init, typename(t), map_, key)
 		rFn := concurrentMapRelease(init)
 		rFn.Ninit.Append(n)
 		rFn = walkexpr(rFn, init)
@@ -1349,18 +1257,14 @@ opswitch:
 
 		t := n.Left.Type
 		p := ""
-		cfn := ""
 		if t.Val().Width <= 128 { // Check ../../runtime/hashmap.go:maxValueSize before changing.
 			switch algtype(t.Key()) {
 			case AMEM32:
 				p = "mapaccess1_fast32"
-				cfn = "cmapaccess1_fast32_interlocked"
 			case AMEM64:
 				p = "mapaccess1_fast64"
-				cfn = "cmapaccess1_fast64_interlocked"
 			case ASTRING:
 				p = "mapaccess1_faststr"
-				cfn = "cmapaccess1_faststr_interlocked"
 			}
 		}
 
@@ -1373,23 +1277,14 @@ opswitch:
 			// orderexpr made sure key is addressable.
 			key = Nod(OADDR, n.Right, nil)
 			p = "mapaccess1"
-			cfn = "cmapaccess1_interlocked"
 		}
 
-		// Mapaccess inside of sync.Interlocked uses cached version
-		if info, ok := isInterlockedMapFunction(n.Left); ok {
-			fn := syslook(cfn)
-			fn = substArgTypes(fn, interlockedInfo(t), t.Key(), t.Val(), t.Key(), t.Val())
-			n = mkcall1(fn, Ptrto(t.Val()), init, typename(t), info, n.Left, key)
-			// TODO: Support FAT types
+		if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
+			n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key)
 		} else {
-			if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
-				n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key)
-			} else {
-				p = "mapaccess1_fat"
-				z := zeroaddr(w)
-				n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key, z)
-			}
+			p = "mapaccess1_fat"
+			z := zeroaddr(w)
+			n = mkcall1(mapfn(p, t), Ptrto(t.Val()), init, typename(t), n.Left, key, z)
 		}
 
 		n.NonNil = true // mapaccess always returns a non-nil pointer
@@ -2342,18 +2237,11 @@ func convas(n *Node, init *Nodes) *Node {
 
 		val = Nod(OADDR, val, nil)
 
-		if info, ok := isInterlockedMapFunction(map_); ok {
-			fn := syslook("cmapassign_interlocked")
-			t := map_.Type
-			fn = substArgTypes(fn, interlockedInfo(t), t.Key(), t.Val(), t.Key(), t.Val())
-			n = mkcall1(fn, nil, init, typename(t), info, map_, key, val)
-		} else {
-			n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
-			rFn := concurrentMapRelease(init)
-			rFn.Ninit.Append(n)
-			rFn = walkexpr(rFn, init)
-			n = rFn
-		}
+		n = mkcall1(mapfn("mapassign1", map_.Type), nil, init, typename(map_.Type), map_, key, val)
+		rFn := concurrentMapRelease(init)
+		rFn.Ninit.Append(n)
+		rFn = walkexpr(rFn, init)
+		n = rFn
 		goto out
 	}
 

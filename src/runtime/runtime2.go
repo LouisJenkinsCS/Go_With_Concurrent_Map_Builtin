@@ -373,9 +373,10 @@ type g struct {
 	// determines how this corresponds to scan work debt.
 	gcAssistBytes int64
 
-	// L.J Injected concurrent map pointer to bucket to be released
+	// Used to keep track of all concurrent maps we are currently interlocked on.
+	interlockedData []*interlockedInfo
+	// Used to release the bucket we are currently on during normal map function calls.
 	releaseBucket unsafe.Pointer
-	releaseDepth  uintptr
 }
 
 type m struct {
@@ -744,6 +745,8 @@ var (
 */
 
 type interlockedInfo struct {
+	// The map we are currently interlocked on
+	cmap unsafe.Pointer
 	// The bucketData we currently have locked.
 	hdr *bucketHdr
 	// The pointer to the key inside of the hdr, for fast access.
