@@ -991,7 +991,6 @@ func (p *parser) for_stmt() *Node {
 	ExpressionList needs to be concurrent maps
 */
 func (p *parser) interlocked_stmt() *Node {
-	fmt.Println("At interlocked statement...")
 	p.want(LINTERLOCKED)
 	markdcl()
 

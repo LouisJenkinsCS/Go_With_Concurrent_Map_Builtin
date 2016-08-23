@@ -104,21 +104,17 @@ func main() {
 			"intset.csv",
 			"intset",
 			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(10)},
-				benchmarkInfo{int64(2), int64(10)},
-				benchmarkInfo{int64(4), int64(10)},
-				benchmarkInfo{int64(8), int64(10)},
-				benchmarkInfo{int64(16), int64(10)},
-				benchmarkInfo{int64(32), int64(10)},
+				benchmarkInfo{int64(1), int64(3)},
+				benchmarkInfo{int64(2), int64(3)},
+				benchmarkInfo{int64(4), int64(3)},
+				benchmarkInfo{int64(8), int64(3)},
+				benchmarkInfo{int64(16), int64(3)},
+				benchmarkInfo{int64(32), int64(3)},
 			},
 		},
 		// Read-Only Iterator
 		benchmarks{
 			[]benchmark{
-				benchmark{
-					iterator_testing.ConcurrentIterator_RO,
-					"Concurrent Map",
-				},
 				benchmark{
 					iterator_testing.ConcurrentIterator_Interlocked_RO,
 					"Concurrent Map (Interlocked)",
@@ -131,21 +127,17 @@ func main() {
 			"iteratorRO.csv",
 			"iteratorRO",
 			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(10)},
-				benchmarkInfo{int64(2), int64(10)},
-				benchmarkInfo{int64(4), int64(10)},
-				benchmarkInfo{int64(8), int64(10)},
-				benchmarkInfo{int64(16), int64(10)},
-				benchmarkInfo{int64(32), int64(10)},
+				benchmarkInfo{int64(1), int64(3)},
+				benchmarkInfo{int64(2), int64(3)},
+				benchmarkInfo{int64(4), int64(3)},
+				benchmarkInfo{int64(8), int64(3)},
+				benchmarkInfo{int64(16), int64(3)},
+				benchmarkInfo{int64(32), int64(3)},
 			},
 		},
 		// Read-Write Iterator
 		benchmarks{
 			[]benchmark{
-				benchmark{
-					iterator_testing.ConcurrentIterator_RW,
-					"Concurrent Map",
-				},
 				benchmark{
 					iterator_testing.ConcurrentIterator_Interlocked_RW,
 					"Concurrent Map (Interlocked)",
@@ -162,12 +154,12 @@ func main() {
 			"iteratorRW.csv",
 			"iteratorRW",
 			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(10)},
-				benchmarkInfo{int64(2), int64(10)},
-				benchmarkInfo{int64(4), int64(10)},
-				benchmarkInfo{int64(8), int64(10)},
-				benchmarkInfo{int64(16), int64(10)},
-				benchmarkInfo{int64(32), int64(10)},
+				benchmarkInfo{int64(1), int64(3)},
+				benchmarkInfo{int64(2), int64(3)},
+				benchmarkInfo{int64(4), int64(3)},
+				benchmarkInfo{int64(8), int64(3)},
+				benchmarkInfo{int64(16), int64(3)},
+				benchmarkInfo{int64(32), int64(3)},
 			},
 		},
 		// Combined
@@ -193,15 +185,15 @@ func main() {
 			"combined.csv",
 			"combined",
 			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(10)},
-				benchmarkInfo{int64(2), int64(10)},
-				benchmarkInfo{int64(4), int64(10)},
-				benchmarkInfo{int64(8), int64(10)},
-				benchmarkInfo{int64(16), int64(10)},
-				benchmarkInfo{int64(32), int64(10)},
+				benchmarkInfo{int64(1), int64(3)},
+				benchmarkInfo{int64(2), int64(3)},
+				benchmarkInfo{int64(4), int64(3)},
+				benchmarkInfo{int64(8), int64(3)},
+				benchmarkInfo{int64(16), int64(3)},
+				benchmarkInfo{int64(32), int64(3)},
 			},
 		},
-		// Combined
+		// Combined - Skim
 		benchmarks{
 			[]benchmark{
 				benchmark{
@@ -224,12 +216,12 @@ func main() {
 			"combinedSkim.csv",
 			"combinedSkim",
 			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(10)},
-				benchmarkInfo{int64(2), int64(10)},
-				benchmarkInfo{int64(4), int64(10)},
-				benchmarkInfo{int64(8), int64(10)},
-				benchmarkInfo{int64(16), int64(10)},
-				benchmarkInfo{int64(32), int64(10)},
+				benchmarkInfo{int64(1), int64(3)},
+				benchmarkInfo{int64(2), int64(3)},
+				benchmarkInfo{int64(4), int64(3)},
+				benchmarkInfo{int64(8), int64(3)},
+				benchmarkInfo{int64(16), int64(3)},
+				benchmarkInfo{int64(32), int64(3)},
 			},
 		},
 	}
