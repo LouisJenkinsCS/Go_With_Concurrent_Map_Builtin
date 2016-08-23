@@ -1,11 +1,14 @@
 package main
 
 import "fmt"
+import "runtime"
 import "intset_testing"
 import "iterator_testing"
 import "combined_testing"
 
 import "os"
+
+var trials int64 = 3
 
 func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) float64 {
 	nsOp := callback(nGoroutines)
@@ -18,7 +21,6 @@ type benchmarks struct {
 	benchmarks []benchmark
 	fileName   string
 	csvHeader  string
-	info       []benchmarkInfo
 }
 
 type benchmark struct {
@@ -41,10 +43,13 @@ func runBenchmark(barr []benchmarks) {
 
 		fmt.Printf("Benchmark: %v\n", bm.csvHeader)
 
+		// nGoroutines are from [1...N] where N is the number of logical CPU's next power of two
+		nGoroutines := int64(runtime.NumCPU() + 1)
+
 		// Header
 		file.WriteString(bm.csvHeader)
-		for _, info := range bm.info {
-			file.WriteString(fmt.Sprintf(",%v", info.nGoroutines))
+		for i := int64(1); i < nGoroutines; i++ {
+			file.WriteString(fmt.Sprintf(",%v", i))
 		}
 		file.WriteString("\n")
 
@@ -53,23 +58,19 @@ func runBenchmark(barr []benchmarks) {
 			// Name of row
 			file.WriteString(b.rowName)
 			fmt.Printf("Section: %v\n", b.rowName)
-			// Run the benchmark for all Goroutines and trials.
-			for _, info := range bm.info {
-				nGoroutines := info.nGoroutines
-				fmt.Printf("Goroutines: %v\n", nGoroutines)
 
-				// Keep track of all benchmark results, as we'll be taking the average after all trials are ran.
+			for nGoroutine := int64(1); nGoroutine <= nGoroutines; nGoroutine++ {
 				nsPerOp := int64(0)
-
-				for i := int64(0); i < info.trials; i++ {
-					fmt.Printf("\rTrial %v/%v", i+1, info.trials)
-					nsPerOp += b.callback(nGoroutines)
-					fmt.Printf("\tns/op: %v", nsPerOp/(i+1))
+				fmt.Printf("Goroutines: %v\n", nGoroutine)
+				for trial := int64(1); trial <= trials; trial++ {
+					fmt.Printf("\rTrial %v/%v", trial, trials)
+					nsPerOp += b.callback(nGoroutine)
+					fmt.Printf("\tns/op: %v", nsPerOp/trial)
 				}
 				fmt.Println()
 
 				// Average then convert to Million Operations per Second
-				nsPerOp /= info.trials
+				nsPerOp /= trials
 				OPS := float64(1000000000) / float64(nsPerOp)
 				MOPS := OPS / float64(1000000)
 
@@ -103,14 +104,6 @@ func main() {
 			},
 			"intset.csv",
 			"intset",
-			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(3)},
-				benchmarkInfo{int64(2), int64(3)},
-				benchmarkInfo{int64(4), int64(3)},
-				benchmarkInfo{int64(8), int64(3)},
-				benchmarkInfo{int64(16), int64(3)},
-				benchmarkInfo{int64(32), int64(3)},
-			},
 		},
 		// Read-Only Iterator
 		benchmarks{
@@ -126,14 +119,6 @@ func main() {
 			},
 			"iteratorRO.csv",
 			"iteratorRO",
-			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(3)},
-				benchmarkInfo{int64(2), int64(3)},
-				benchmarkInfo{int64(4), int64(3)},
-				benchmarkInfo{int64(8), int64(3)},
-				benchmarkInfo{int64(16), int64(3)},
-				benchmarkInfo{int64(32), int64(3)},
-			},
 		},
 		// Read-Write Iterator
 		benchmarks{
@@ -153,14 +138,6 @@ func main() {
 			},
 			"iteratorRW.csv",
 			"iteratorRW",
-			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(3)},
-				benchmarkInfo{int64(2), int64(3)},
-				benchmarkInfo{int64(4), int64(3)},
-				benchmarkInfo{int64(8), int64(3)},
-				benchmarkInfo{int64(16), int64(3)},
-				benchmarkInfo{int64(32), int64(3)},
-			},
 		},
 		// Combined
 		benchmarks{
@@ -184,14 +161,6 @@ func main() {
 			},
 			"combined.csv",
 			"combined",
-			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(3)},
-				benchmarkInfo{int64(2), int64(3)},
-				benchmarkInfo{int64(4), int64(3)},
-				benchmarkInfo{int64(8), int64(3)},
-				benchmarkInfo{int64(16), int64(3)},
-				benchmarkInfo{int64(32), int64(3)},
-			},
 		},
 		// Combined - Skim
 		benchmarks{
@@ -215,14 +184,6 @@ func main() {
 			},
 			"combinedSkim.csv",
 			"combinedSkim",
-			[]benchmarkInfo{
-				benchmarkInfo{int64(1), int64(3)},
-				benchmarkInfo{int64(2), int64(3)},
-				benchmarkInfo{int64(4), int64(3)},
-				benchmarkInfo{int64(8), int64(3)},
-				benchmarkInfo{int64(16), int64(3)},
-				benchmarkInfo{int64(32), int64(3)},
-			},
 		},
 	}
 
