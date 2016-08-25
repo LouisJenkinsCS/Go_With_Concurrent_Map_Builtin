@@ -6,12 +6,6 @@ package sync
 
 import "unsafe"
 
-// L.J: Concurrent Map declaration that can be passed to second argument of make: make(map[int]int, sync.CONCURRENT)
-
-const (
-	CONCURRENT = -1
-)
-
 // defined in package runtime
 
 // Semacquire waits until *s > 0 and then atomically decrements it.

@@ -1195,6 +1195,11 @@ OpSwitch:
 				n = typecheck1(n, top)
 				return n
 			}
+
+			if isinterlocked(n) {
+				n.Op = OCALLFUNC
+				return n
+			}
 		}
 
 		n.Left = typecheck(n.Left, Erv|Etype|Ecall)

@@ -676,6 +676,11 @@ opswitch:
 		n.List.Set(reorder1(ll))
 
 	case OCALLFUNC:
+		r := interlockednmagic(n)
+		if r != nil {
+			n = r
+		}
+
 		if n.Left.Op == OCLOSURE {
 			// Transform direct call of a closure to call of a normal function.
 			// transformclosure already did all preparation work.

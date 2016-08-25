@@ -478,6 +478,7 @@ func orderstmt(n *Node, order *Order) {
 
 	switch n.Op {
 	default:
+		fmt.Printf("Node: %v\n", n)
 		Fatalf("orderstmt %v", n.Op)
 
 	case OVARKILL, OVARLIVE:
@@ -694,7 +695,7 @@ func orderstmt(n *Node, order *Order) {
 		orderblockNodes(&n.Nbody)
 		n.Rlist.Set(orderblock(n.Rlist))
 		order.out = append(order.out, n)
-	
+
 	// L.J: Beginning of sync.Interlocked; TODO: Figure out what this does
 	case OINTERLOCKED:
 		t := marktemp(order)

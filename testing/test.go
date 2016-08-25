@@ -50,8 +50,13 @@ type T struct {
 	iter uint64
 }
 
+func interlockedFnc(val *T, pres bool) {
+}
+
 func main() {
-	m := make(map[int]T, 0, 1)
+	m := make(map[int]T, 1000, 1)
+	key := 1
+	sync.Interlocked(m, key, true, interlockedFnc)
 	for i := 0; i < 1000; i++ {
 		m[i] = T{}
 	}

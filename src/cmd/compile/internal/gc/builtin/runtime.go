@@ -101,25 +101,10 @@ func mapdelete(mapType *byte, hmap map[any]any, key *any)
 func mapiternext(hiter *any)
 // L.J: Concurrent map release
 func maprelease()
-func mapacquire(mapType *byte, hmap map[any]any, key *any) *any
 func cmapiterinit(mapType *byte, hmap map[any]any, hiter *any)
-func cmapiterinit_interlocked(mapType *byte, hmap map[any]any, hiter *any)
 func cmapiternext(hiter *any)
-func cmapiternext_interlocked(hiter *any)
-// L.J: Concurrent map interlocked functions
-func cmapaccess1_interlocked(mapType *byte, info *any, hmap map[any]any, key *any) (val *any)
-func cmapaccess1_fast32_interlocked(mapType *byte, info *any, hmap map[any]any, key any) (val *any)
-func cmapaccess1_fast64_interlocked(mapType *byte, info *any, hmap map[any]any, key any) (val *any)
-func cmapaccess1_faststr_interlocked(mapType *byte, info *any, hmap map[any]any, key any) (val *any)
-func cmapaccess2_interlocked(mapType *byte, info *any, hmap map[any]any, key *any) (val *any, pres bool)
-func cmapaccess2_fast32_interlocked(mapType *byte, info *any, hmap map[any]any, key any) (val *any, pres bool)
-func cmapaccess2_fast64_interlocked(mapType *byte, info *any, hmap map[any]any, key any) (val *any, pres bool)
-func cmapaccess2_faststr_interlocked(mapType *byte, info *any, hmap map[any]any, key any) (val *any, pres bool)
-func cmapassign_interlocked(mapType *byte, info *any, hmap map[any]any, key *any, val *any)
-func cmapdelete_interlocked(mapType *byte, info *any, hmap map[any]any, key *any)
-func maprelease_interlocked(mapType *byte, info *any, hmap map[any]any)
-func cmapiterinfo(hiter *any) *any
-
+func interlocked(mapType *byte, hmap map[any]any, key *any, create bool, fn func(value *any, pres bool)) bool
+func interlockedPtr(mapType *byte, hmap map[any]any, key *any, create bool, fn func(value any, pres bool)) bool
 
 // *byte is really *runtime.Type
 func makechan(chanType *byte, hint int64) (hchan chan any)
