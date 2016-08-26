@@ -51,6 +51,9 @@ type T struct {
 }
 
 func interlockedFnc(val *T, pres bool) {
+	fmt.Printf("%v", val.iter)
+	val.iter = 1
+	fmt.Printf("%v", val.iter)
 }
 
 func main() {

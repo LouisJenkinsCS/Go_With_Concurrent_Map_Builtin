@@ -470,9 +470,6 @@ const (
 	OSQRT   // sqrt(float64), on systems that have hw support
 	OGETG   // runtime.getg() (read g pointer)
 
-	// L.J: Concurrent Map critical section
-	OINTERLOCKED // runtime.Interlocked List { Body }
-
 	OEND
 )
 

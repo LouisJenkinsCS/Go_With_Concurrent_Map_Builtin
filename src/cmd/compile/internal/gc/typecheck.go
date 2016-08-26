@@ -2047,24 +2047,6 @@ OpSwitch:
 		typecheckslice(n.Rlist.Slice(), Etop)
 		break OpSwitch
 
-	case OINTERLOCKED:
-		ok |= Etop
-		t := n.List.First().Type
-		if t != nil {
-			if !t.IsMap() {
-				Yyerror("sync.Interlocked requires an assignment from an rvalue map!Received %v of type %v", n.List.First(), t)
-			}
-		}
-
-		typecheckslice(n.Ninit.Slice(), Etop)
-		n.Left = typecheck(n.Left, Erv)
-		if t != nil {
-			n.List.Second().Type = t.MapType().Key
-			n.List.Second().Typecheck = 1
-		}
-		typecheckslice(n.List.Slice(), Erv)
-		typecheckslice(n.Nbody.Slice(), Etop)
-
 	case ORETURN:
 		ok |= Etop
 		if n.List.Len() == 1 {
@@ -3917,9 +3899,6 @@ func (n *Node) isterminating() bool {
 
 	case OIF:
 		return n.Nbody.isterminating() && n.Rlist.isterminating()
-
-	case OINTERLOCKED:
-		return n.Nbody.isterminating()
 
 	case OSWITCH, OTYPESW, OSELECT:
 		if n.HasBreak() {

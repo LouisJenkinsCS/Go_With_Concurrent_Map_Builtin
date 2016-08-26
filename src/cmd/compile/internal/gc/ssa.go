@@ -555,8 +555,6 @@ func (s *state) stmt(n *Node) {
 
 	case OBLOCK:
 		s.stmtList(n.List)
-	case OINTERLOCKED:
-		s.stmtList(n.Nbody)
 
 	// No-ops
 	case OEMPTY, ODCLCONST, ODCLTYPE, OFALL:

@@ -696,17 +696,6 @@ func orderstmt(n *Node, order *Order) {
 		n.Rlist.Set(orderblock(n.Rlist))
 		order.out = append(order.out, n)
 
-	// L.J: Beginning of sync.Interlocked; TODO: Figure out what this does
-	case OINTERLOCKED:
-		t := marktemp(order)
-		n.Left = orderexprinplace(n.Left, order)
-		var l []*Node
-		cleantempnopop(t, order, &l)
-		n.Nbody.Set(append(l, n.Nbody.Slice()...))
-		orderblockNodes(&n.Nbody)
-		order.out = append(order.out, n)
-		cleantemp(t, order)
-
 		// Special: argument will be converted to interface using convT2E
 	// so make sure it is an addressable temporary.
 	case OPANIC:
