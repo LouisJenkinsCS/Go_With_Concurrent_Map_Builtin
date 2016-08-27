@@ -59,7 +59,7 @@ func interlockedFnc(val *T, pres bool) {
 func main() {
 	m := make(map[int]T, 1000, 1)
 	key := 1
-	sync.Interlocked(m, key, true, interlockedFnc)
+	sync.Interlocked(m, key)
 	for i := 0; i < 1000; i++ {
 		m[i] = T{}
 	}
