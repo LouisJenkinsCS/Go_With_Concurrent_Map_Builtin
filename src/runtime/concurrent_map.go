@@ -619,33 +619,10 @@ next:
 			break
 		}
 
-		// Keep track of the current lock-holder
-		holder := lock & LOCKED_MASK
-
-		// Tight-spin until the current lock-holder releases lock
-		for {
-			if spins < GOSCHED_AFTER_SPINS {
-				procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-			} else if spins < SLEEP_AFTER_SPINS {
-				Gosched()
-			} else {
-				// During iteration, we do not backoff to reduce the effects of lock convoying. Instead if after
-				// a busy-wait spin, we skip this bucket and process it later.
-				citer.skippedBuckets = append(citer.skippedBuckets, citer.arr.buckets[idx])
-				goto next
-			}
-			spins++
-
-			// We test the lock on each iteration
-			lock = atomic.Loaduintptr(&hdr.lock)
-			// If the previous lock-holder released the lock, attempt to acquire again.
-			if lock != holder {
-				if spins > 20 {
-					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-				}
-				break
-			}
-		}
+		// During iteration, we do not backoff to reduce the effects of lock convoying.
+		// Instead we skip this bucket and process it later.
+		citer.skippedBuckets = append(citer.skippedBuckets, citer.arr.buckets[idx])
+		goto next
 	}
 
 	info.hdr = hdr
