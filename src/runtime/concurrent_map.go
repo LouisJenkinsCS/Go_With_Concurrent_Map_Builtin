@@ -1583,12 +1583,14 @@ next:
 	} // Compiler-Inserted maprelease_interlocked function
 
 */
-func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) *interlockedInfo {
+//go:linkname mapacquire reflect.interlockedImpl
+func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) {
 	if h.chdr == nil {
 		throw("sync.Interlocked invoked on a non-concurrent map!")
 	}
 
 	info := (*interlockedInfo)(newobject(t.interlockedinfo))
+	info.cmap = h.chdr
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
 	var hash, idx, spins uintptr
@@ -1597,6 +1599,15 @@ func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) *interlockedInfo {
 	g := getg()
 	gptr := uintptr(unsafe.Pointer(g))
 
+	// If we already have this key interlocked we are done.
+	for _, data := range g.interlockedData {
+		if data.cmap == h.chdr {
+			throw("Attempt to acquire a key while currently interlocked!")
+		}
+	}
+
+	g.interlockedData = append(g.interlockedData, info)
+
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
 next:
 	// Obtain the hash, index, and bucketHdr.
@@ -1604,6 +1615,7 @@ next:
 	idx = hash % uintptr(len(arr.buckets))
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 
+test:
 	// If hdr is nil, then no bucketData has been created yet. Do a wait-free creation of bucketData;
 	for hdr == nil {
 		// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
@@ -1612,12 +1624,27 @@ next:
 		newHdr.lock = gptr
 		newHdr.parent = arr
 		newHdr.parentIdx = uint32(idx)
+		newHdr.count = uintptr(1)
 		// If we fail, then some other Goroutine has already placed theirs.
 		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 			// If we succeed, then we own this bucket and need to keep track of it
 			info.hdr = newHdr
 			// Also increment count of buckets
 			atomic.Xadduintptr(&arr.count, 1)
+			atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
+
+			// Since we just created this bucket, we can easily assign to the first slot.
+			data := (*bucketData)(unsafe.Pointer(newHdr))
+			data.assign(t, uintptr(0), hash, key, nil)
+
+			info.key = data.key(t, uintptr(0))
+			info.value = data.value(t, uintptr(0))
+			info.hash = &data.hash[0]
+
+			// Mark as being not-present so it will be cleaned up if the user never assigns to it.
+			info.flags |= KEY_DELETED
+
+			return
 		}
 		// Reload hdr
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
@@ -1636,25 +1663,8 @@ next:
 		if lock == INVALID {
 			// Reload hdr, since what it was pointed to has changed
 			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			// If the hdr was deleted, then attempt to create a new one and try again
-			for hdr == nil {
-				// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
-				newHdr := (*bucketHdr)(newobject(t.bucketdata))
-				// Since we're setting it, may as well attempt to acquire lock
-				newHdr.lock = gptr
-				newHdr.parent = arr
-				newHdr.parentIdx = uint32(idx)
-				// If we fail, then some other Goroutine has already placed theirs.
-				if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
-					// If we succeed, then we own this bucket and need to keep track of it
-					info.hdr = newHdr
-					// Also increment count of buckets
-					atomic.Xadduintptr(&arr.count, 1)
-				}
-				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			}
-			// Loop again.
-			continue
+			// Test hdr again; skip rehashing
+			goto test
 		}
 
 		// If it's recursive, try again on new bucket
@@ -1738,7 +1748,7 @@ next:
 				info.value = data.value(t, uintptr(i))
 				info.hash = &data.hash[i]
 
-				return info
+				return
 			}
 		}
 	}
@@ -1817,11 +1827,10 @@ next:
 	info.key = data.key(t, uintptr(firstEmpty))
 	info.value = data.value(t, uintptr(firstEmpty))
 	info.hash = &data.hash[uintptr(firstEmpty)]
+	info.flags |= KEY_DELETED
 	// Since we just assigned to a new empty slot, we need to increment count
 	atomic.Xadduintptr(&hdr.count, 1)
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
-
-	return info
 }
 
 /*
@@ -2101,12 +2110,23 @@ func cmapdelete_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsa
 		// Do something with map[key]
 	} // Compiler-Inserted maprelease_interlocked function
 */
-func maprelease_interlocked(t *maptype, info *interlockedInfo, h *hmap) {
+//go:linkname maprelease_interlocked reflect.interlockedReleaseImpl
+func maprelease_interlocked(t *maptype, h *hmap) {
+	var info *interlockedInfo
+	g := getg()
+	for _, data := range g.interlockedData {
+		if data.cmap == h.chdr {
+			info = data
+			break
+		}
+	}
+
 	// Handle cases where the current key has been marked for deletion. At this point, the corresponding value has already been zero'd.
 	// Note, for iteration it must handle deleting its own keys after each successful iteration.
 	if (info.flags & KEY_DELETED) != 0 {
 		memclr(unsafe.Pointer(info.key), uintptr(t.keysize))
 		*info.hash = EMPTY
+		atomic.Xadduintptr(&info.hdr.count, ^uintptr(0))
 	}
 
 	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
@@ -2121,6 +2141,8 @@ func maprelease_interlocked(t *maptype, info *interlockedInfo, h *hmap) {
 		// Otherwise, just release the lock on the bucket
 		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
 	}
+
+	g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
 }
 
 /*
@@ -2136,7 +2158,6 @@ func cmapiterinfo(it *hiter) *interlockedInfo {
 	return nil
 }
 
-//go:linkname interlocked reflect.interlockedImpl
 func interlocked(t *maptype, h *hmap, key unsafe.Pointer) {
 	throw("Inside interlocked!")
 	// 	if h == nil {

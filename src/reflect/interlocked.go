@@ -23,4 +23,13 @@ func interlocked(map_ interface{}, key interface{}) {
 	interlockedImpl(m.typ, m.pointer(), k2)
 }
 
+//go:linkname release sync.Release
+func release(map_ interface{}) {
+	m := ValueOf(map_)
+	m.mustBe(Map)
+	interlockedReleaseImpl(m.typ, m.pointer())
+}
+
 func interlockedImpl(maptype *rtype, cmap unsafe.Pointer, key unsafe.Pointer)
+
+func interlockedReleaseImpl(maptype *rtype, cmap unsafe.Pointer)

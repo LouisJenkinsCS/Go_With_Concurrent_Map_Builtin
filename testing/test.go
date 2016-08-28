@@ -46,7 +46,6 @@ func populate_map(m map[point]point) {
 }
 
 type T struct {
-	_    [56]byte
 	iter uint64
 }
 
@@ -60,6 +59,17 @@ func main() {
 	m := make(map[int]T, 1000, 1)
 	key := 1
 	sync.Interlocked(m, key)
+	v, pres := m[key]
+	fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	m[key] = T{1}
+	v, pres = m[key]
+	fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	delete(m, key)
+	v, pres = m[key]
+	fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	sync.Release(m)
+	v, pres = m[key]
+	fmt.Printf("Val: %v,Present: %v\n", v, pres)
 	for i := 0; i < 1000; i++ {
 		m[i] = T{}
 	}
@@ -75,11 +85,19 @@ func main() {
 		go func() {
 			iterations := 0
 			start.Wait()
-			for k, v := range m {
-				v.iter++
-				t := m[k]
+			// for k, v := range m {
+			// 	v.iter++
+			// 	t := m[k]
+			// 	t.iter = t.iter + 1
+			// 	m[k] = t
+			// 	iterations++
+			// }
+			for i := 0; i < 1000; i++ {
+				sync.Interlocked(m, i)
+				t := m[i]
 				t.iter = t.iter + 1
-				m[k] = t
+				m[i] = t
+				sync.Release(m)
 				iterations++
 			}
 			fmt.Printf("Iterations: %v\n", iterations)
