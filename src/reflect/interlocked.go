@@ -33,3 +33,11 @@ func release(map_ interface{}) {
 func interlockedImpl(maptype *rtype, cmap unsafe.Pointer, key unsafe.Pointer)
 
 func interlockedReleaseImpl(maptype *rtype, cmap unsafe.Pointer)
+
+func ProfileMap(cmap interface{}) {
+	m := ValueOf(cmap)
+	m.mustBe(Map)
+	profile_map(m.pointer())
+}
+
+func profile_map(cmap unsafe.Pointer)

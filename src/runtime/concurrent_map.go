@@ -133,7 +133,8 @@ const (
 	LOCKED_MASK = ^uintptr(0x3)
 
 	// Hash value signifying that the hash is not in use.
-	EMPTY = 0
+	EMPTY      = 0
+	HASH_SHIFT = sys.PtrSize*8 - 8
 
 	// The minimum number of CPU cycles we spin during the tight-spin waiting for the lock holder to change.
 	MIN_SPIN_CYCLES = 10
@@ -173,6 +174,8 @@ var DUMMY_RETVAL [MAXZERO]byte
 
 /*
 	bucketHdr is the header that serves three purposes. bucketHdr can be cast to and from bucketData and bucketArray.
+	The bucketHdr also ensures it remains in it's own cache-line, so accessing it does not invalidate
+	the data it actually described.
 
 	Descriptor:
 		bucketHdr is a descriptor for the body of the bucketHdr, and can be casted to and from it's header to it's corresponding actual type
@@ -187,14 +190,13 @@ type bucketHdr struct {
 	// INVALID | ARRAY | UNLOCKED | LOCKED
 	lock uintptr
 	// Number of elements in this bucketHdr
-	count uintptr
-	// Prevent false sharing
-	_ [sys.CacheLineSize - 2*sys.PtrSize]byte
-	// Index of this hdr in parent
+	count uint32
+	// Index we are on inside of our parent.
 	parentIdx uint32
-	_         uint32
-	// Pointer to the parent bucketArray (if there is one)
+	// The parent bucketArray we belong to; nil if we are the root.
 	parent *bucketArray
+	// Prevent false sharing
+	_ [sys.CacheLineSize - 2*sys.PtrSize - 8]byte
 }
 
 /*
@@ -206,11 +208,10 @@ type bucketHdr struct {
 type bucketArray struct {
 	// Fields embedded from bucketHdr; for complexity reasons, we can't actually embed the type in the runtime (because we would have to also do so in compiler)
 	lock      uintptr
-	count     uintptr
-	_         [sys.CacheLineSize - 2*sys.PtrSize]byte
+	count     uint32
 	parentIdx uint32
-	_         uint32
 	parent    *bucketArray
+	_         [sys.CacheLineSize - 2*sys.PtrSize - 8]byte
 
 	// Seed is different for each bucketArray to ensure that the re-hashing resolves to different indice
 	seed uint32
@@ -224,16 +225,15 @@ type bucketArray struct {
    It's key and value slots are only accessible through unsafe pointer arithmetic.
 */
 type bucketData struct {
-	// Fields embedded from bucketHdr
+	// Fields embedded from bucketHdr; for complexity reasons, we can't actually embed the type in the runtime (because we would have to also do so in compiler)
 	lock      uintptr
-	count     uintptr
-	_         [sys.CacheLineSize - 2*sys.PtrSize]byte
+	count     uint32
 	parentIdx uint32
-	_         uint32
 	parent    *bucketArray
+	_         [sys.CacheLineSize - 2*sys.PtrSize - 8]byte
 
-	// Hash of the key-value corresponding to this index. If it is 0, it is empty. Aligned to cache line (64 bytes)
-	hash [MAX_SLOTS]uintptr
+	// Hash of the key-value corresponding to this index. If it is 0, it is empty. Top byte to reduce overall size.
+	tophash [MAX_SLOTS]uint8
 	// It's key and value slots are below, and would appear as such if the runtime supported generics...
 	/*
 	   key [MAX_SLOTS]keyType
@@ -284,20 +284,20 @@ type concurrentIterator struct {
 /*
 	Obtains the pointer to the key slot at the requested offset.
 */
-func (data *bucketData) key(t *maptype, idx uintptr) unsafe.Pointer {
+func (data *bucketData) key(t *maptype, idx uint32) unsafe.Pointer {
 	// Cast data to unsafe.Pointer to bypass Go's type system
 	rawData := unsafe.Pointer(data)
 	// The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAX_SLOTS
 	keyOffset := uintptr(rawData) + uintptr(cdataOffset)
 	// Now the key at index 'idx' is located at idx * t.keysize
-	ourKeyOffset := keyOffset + idx*uintptr(t.keysize)
+	ourKeyOffset := keyOffset + uintptr(idx)*uintptr(t.keysize)
 	return unsafe.Pointer(ourKeyOffset)
 }
 
 /*
 	Obtains the pointer to the value slot at the requested offset.
 */
-func (data *bucketData) value(t *maptype, idx uintptr) unsafe.Pointer {
+func (data *bucketData) value(t *maptype, idx uint32) unsafe.Pointer {
 	// Cast data to unsafe.Pointer to bypass Go's type system
 	rawData := unsafe.Pointer(data)
 	// The array of keys are located at the beginning of cdataOffset, and is contiguous up to MAX_SLOTS
@@ -305,14 +305,14 @@ func (data *bucketData) value(t *maptype, idx uintptr) unsafe.Pointer {
 	// The array of values are located at the end of the array of keys, located at MAX_SLOTS * t.keysize
 	valueOffset := keyOffset + MAX_SLOTS*uintptr(t.keysize)
 	// Now the value at index 'idx' is located at idx * t.valuesize
-	ourValueOffset := valueOffset + idx*uintptr(t.valuesize)
+	ourValueOffset := valueOffset + uintptr(idx)*uintptr(t.valuesize)
 	return unsafe.Pointer(ourValueOffset)
 }
 
 /*
 	Assigns into the data slot the passed information at the requested index (hash/key/value)
 */
-func (data *bucketData) assign(t *maptype, idx, hash uintptr, key, value unsafe.Pointer) {
+func (data *bucketData) assign(t *maptype, idx uint32, hash uintptr, key, value unsafe.Pointer) {
 	k := data.key(t, idx)
 	v := data.value(t, idx)
 
@@ -336,13 +336,18 @@ func (data *bucketData) assign(t *maptype, idx, hash uintptr, key, value unsafe.
 		typedmemmove(t.elem, v, value)
 	}
 
-	data.hash[idx] = hash
+	tophash := uint8(hash >> HASH_SHIFT)
+	// Top COULD be 0
+	if tophash == 0 {
+		tophash += 1
+	}
+	data.tophash[idx] = tophash
 }
 
 /*
 	Updates the requested key and value at the requested index. Note that it assumes that the index is correct and corresponds to the key passed.
 */
-func (data *bucketData) update(t *maptype, idx uintptr, key, value unsafe.Pointer) {
+func (data *bucketData) update(t *maptype, idx uint32, key, value unsafe.Pointer) {
 	v := data.value(t, idx)
 
 	// Indirect Key and Values need some indirection
@@ -365,6 +370,67 @@ func (data *bucketData) update(t *maptype, idx uintptr, key, value unsafe.Pointe
 /**
  * Concurrent map iteration functions.
  */
+
+//go:linkname profile_map reflect.profile_map
+func profile_map(h *hmap) {
+	cmap := (*concurrentMap)(h.chdr)
+	arr := &cmap.root
+	var idx uint32
+	var depth, nData, nArr int
+	// Arbitrary max; if we ever go out of bounds, we're in trouble!
+	depthMap := make([]uint64, 1)
+next:
+	arrAtDepth := depthMap[depth] >> 32
+	dataAtDepth := depthMap[depth] & uint64(^uint32(0))
+
+	if idx == uint32(len(arr.buckets)) {
+		if arr.parent == nil {
+			// Dump
+			println("\rTotal Data:", nData, ";Total Array:", nArr)
+			for idx, _ := range depthMap {
+				arrAtDepth = depthMap[idx] >> 32
+				dataAtDepth = depthMap[idx] & uint64(^uint32(0))
+				println("Depth:", idx, ";nData:", dataAtDepth, "nArray:", arrAtDepth)
+			}
+			println("Sizeof: bucketData(EList)=", unsafe.Sizeof(bucketData{}))
+			println("Sizeof: bucketArray(PList)=", unsafe.Sizeof(bucketArray{}))
+			println("Size of all bucketData(EList)=", uint64(unsafe.Sizeof(bucketData{}))*uint64(nData))
+			println("Size of all bucketArray(PList)=", uint64(unsafe.Sizeof(bucketArray{}))*uint64(nArr))
+			return
+		} else {
+			depth--
+			idx = arr.parentIdx
+			arr = arr.parent
+			idx++
+			goto next
+		}
+	}
+
+	hdr := arr.buckets[idx]
+	idx++
+	if hdr == nil {
+		goto next
+	}
+
+	if hdr.lock == ARRAY {
+		nArr++
+		arrAtDepth++
+		depthMap[depth] = (arrAtDepth << 32) | dataAtDepth
+		depth++
+		if len(depthMap) < (depth + 1) {
+			depthMap = append(depthMap, 0)
+		}
+		arr = (*bucketArray)(unsafe.Pointer(hdr))
+		idx = 0
+	} else {
+		nData++
+		dataAtDepth++
+		depthMap[depth] = (arrAtDepth << 32) | dataAtDepth
+	}
+
+	print("\rData:", nData, ";Array:", nArr)
+	goto next
+}
 
 /*
 	Atomic snapshot initialization. Called at the beginning of iteration to setup the iterator.
@@ -458,16 +524,16 @@ findKeyValue:
 		}
 
 		// If this cell is empty, loop again
-		if data.hash[offset] == EMPTY {
+		if data.tophash[offset] == EMPTY {
 			goto findKeyValue
 		}
 
 		// The key and values are present, but perform necessary indirection
-		key = data.key(t, uintptr(offset))
+		key = data.key(t, offset)
 		if t.indirectkey {
 			key = *(*unsafe.Pointer)(key)
 		}
-		value = data.value(t, uintptr(offset))
+		value = data.value(t, offset)
 		if t.indirectvalue {
 			value = *(*unsafe.Pointer)(value)
 		}
@@ -476,9 +542,9 @@ findKeyValue:
 		it.key = key
 		it.value = value
 
-		info.key = data.key(t, uintptr(offset))
-		info.value = data.value(t, uintptr(offset))
-		info.hash = &data.hash[offset]
+		info.key = data.key(t, offset)
+		info.value = data.value(t, offset)
+		info.hash = &data.tophash[offset]
 		return
 	}
 
@@ -493,11 +559,11 @@ findKeyValue:
 	// If flags == 0, then none of the KEY_DELETED bits are set, so we can easily just proceed.
 	if info.flags != 0 {
 		// Check each bit
-		for bit, idx := uintptr(1), MAX_SLOTS-1; idx >= 0; bit, idx = bit<<1, idx-1 {
+		for bit, idx := uint32(1), MAX_SLOTS-1; idx >= 0; bit, idx = bit<<1, idx-1 {
 			// If the bit is set, the key and hash need to be zero'd.
-			if (info.flags & bit) != 0 {
-				memclr(unsafe.Pointer(data.key(t, uintptr(idx))), uintptr(t.keysize))
-				data.hash[idx] = EMPTY
+			if (info.flags & uintptr(bit)) != 0 {
+				memclr(unsafe.Pointer(data.key(t, uint32(idx))), uintptr(t.keysize))
+				data.tophash[idx] = EMPTY
 			}
 		}
 
@@ -512,7 +578,7 @@ findKeyValue:
 		atomic.Storeuintptr(&data.lock, INVALID)
 
 		// Also decrement number of buckets
-		atomic.Xadduintptr(&data.parent.count, ^uintptr(0))
+		atomic.Xadd(&data.parent.count, -1)
 	} else {
 		// Otherwise, just release the lock on the bucket
 		atomic.Storeuintptr(&data.lock, UNLOCKED)
@@ -565,7 +631,7 @@ next:
 	citer.idx++
 
 	// Read ahead of time if we should skip.
-	if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+	if hdr == nil || atomic.Load(&hdr.count) == 0 {
 		goto next
 	}
 
@@ -583,7 +649,7 @@ next:
 			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all).
 			// hdr.count == 0 iff another Goroutine has created a new bucketData during a 'mapassign' but has not yet finished it's assignment.
 			// In this case, there's still nothing here for us.
-			if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+			if hdr == nil || atomic.Load(&hdr.count) == 0 {
 				goto next
 			}
 			// Loop again.
@@ -657,7 +723,7 @@ pollSkippedBuckets:
 			}
 
 			// There is no data here (yet), dispose of it.
-			if atomic.Loaduintptr(&hdr.count) == 0 {
+			if atomic.Load(&hdr.count) == 0 {
 				citer.skippedBuckets[idx] = nil
 				continue
 			}
@@ -852,7 +918,7 @@ next:
 			// If we succeed, then we own this bucket and need to keep track of it
 			g.releaseBucket = unsafe.Pointer(newHdr)
 			// Also increment count of buckets
-			atomic.Xadduintptr(&arr.count, 1)
+			atomic.Xadd(&arr.count, 1)
 			setByUs = true
 		}
 		// Reload hdr
@@ -888,7 +954,7 @@ next:
 					// If we succeed, then we own this bucket and need to keep track of it
 					g.releaseBucket = unsafe.Pointer(newHdr)
 					// Also increment count of buckets
-					atomic.Xadduintptr(&arr.count, 1)
+					atomic.Xadd(&arr.count, 1)
 					setByUs = true
 				}
 				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
@@ -978,42 +1044,49 @@ next:
 	}
 
 	data := (*bucketData)(unsafe.Pointer(hdr))
+	count := atomic.Load(&hdr.count)
 	firstEmpty := -1
 
 	// In the special case that hdr.count == 0, then the bucketData is empty and we should just add the data immediately.
-	if hdr.count == 0 {
+	if count == 0 {
 		data.assign(t, 0, hash, key, val)
-		atomic.Xadduintptr(&hdr.count, 1)
+		atomic.Store(&hdr.count, 1)
 		atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 		return
 	}
 
 	// Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
-	for i, count := 0, hdr.count; i < MAX_SLOTS && count > 0; i++ {
-		currHash := data.hash[i]
+	for i, cnt := uint32(0), count; i < MAX_SLOTS && cnt > 0; i++ {
+		tophash := uint8(hash >> HASH_SHIFT)
+		// Top COULD be 0
+		if tophash == 0 {
+			tophash += 1
+		}
+
+		currHash := data.tophash[i]
 		if currHash == EMPTY {
 			// Keep track of the first empty so we know what to assign into if we do not find a match
 			if firstEmpty == -1 {
-				firstEmpty = i
+				firstEmpty = int(i)
 			}
 			continue
 		}
-		count--
+		cnt--
 
 		// If the hash matches, check to see if keys are equal
-		if hash == data.hash[i] {
-			otherKey := data.key(t, uintptr(i))
+		if tophash == currHash {
+			otherKey := data.key(t, i)
 
 			// If they are equal, update...
 			if t.key.alg.equal(key, otherKey) {
-				data.update(t, uintptr(i), key, val)
+				data.update(t, i, key, val)
 				return
 			}
 		}
 	}
 
 	// If firstEmpty is still -1 and the bucket is full, that means we did not find any empty slots, and should convert immediate
-	if firstEmpty == -1 && hdr.count == MAX_SLOTS {
+	if firstEmpty == -1 && count == MAX_SLOTS {
 		// println("g #", getg().goid, ": Resizing...")
 		// Allocate and initialize
 		// println("len(arr.buckets) = ", len(arr.buckets))
@@ -1032,9 +1105,9 @@ next:
 		newArr.parentIdx = uint32(idx)
 
 		// Rehash and move all key-value pairs
-		for i := 0; i < MAX_SLOTS; i++ {
-			k := data.key(t, uintptr(i))
-			v := data.value(t, uintptr(i))
+		for i := uint32(0); i < MAX_SLOTS; i++ {
+			k := data.key(t, i)
+			v := data.value(t, i)
 
 			// Rehash the key to the new seed
 			newHash := t.key.alg.hash(k, uintptr(newArr.seed))
@@ -1057,10 +1130,10 @@ next:
 			}
 
 			// If it is not nil, then we must scan for the first non-empty slot
-			for j := 0; j < MAX_SLOTS; j++ {
-				currHash := newData.hash[j]
+			for j := uint32(0); j < MAX_SLOTS; j++ {
+				currHash := newData.tophash[j]
 				if currHash == EMPTY {
-					newData.assign(t, uintptr(j), newHash, k, v)
+					newData.assign(t, j, newHash, k, v)
 					newData.count++
 					break
 				}
@@ -1068,7 +1141,7 @@ next:
 		}
 
 		// Now dispose of old data and update the header's bucket; We have to be careful to NOT overwrite the header portion
-		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(sys.PtrSize)+uintptr(t.keysize)+uintptr(t.valuesize)))
+		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(1)+uintptr(t.keysize)+uintptr(t.valuesize)))
 		// Update and then invalidate to point to nested ARRAY
 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
 		// println("len: ", len(arr.buckets), "parentIdx: ", data.parentIdx, ", idx: ", idx)
@@ -1087,12 +1160,13 @@ next:
 	// Hence, the first empty is going to be at idx hdr.count because there is none empty before it.
 	// TODO: Clarification
 	if firstEmpty == -1 {
-		firstEmpty = int(hdr.count)
+		firstEmpty = int(count)
 	}
+
 	// At this point, firstEmpty is guaranteed to be non-zero and within bounds, hence we can safely assign to it
-	data.assign(t, uintptr(firstEmpty), hash, key, val)
+	data.assign(t, uint32(firstEmpty), hash, key, val)
 	// Since we just assigned to a new empty slot, we need to increment count
-	atomic.Xadduintptr(&hdr.count, 1)
+	atomic.Store(&hdr.count, count+1)
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 }
 
@@ -1142,7 +1216,7 @@ next:
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 
 	// Save time by looking ahead of time (testing) if the header or if the bucket is empty
-	if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+	if hdr == nil || atomic.Load(&hdr.count) == 0 {
 		return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 	}
 
@@ -1162,7 +1236,7 @@ next:
 			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all)
 			// hdr.count == 0 if another Goroutine has created a new bucketData after the old became INVALID. In this
 			// case, there's still nothing here for us.
-			if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+			if hdr == nil || atomic.Load(&hdr.count) == 0 {
 				return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 			}
 			// Loop again.
@@ -1249,8 +1323,13 @@ next:
 	data := (*bucketData)(unsafe.Pointer(hdr))
 
 	// Search the bucketData for the data needed
-	for i, count := 0, hdr.count; i < MAX_SLOTS && count > 0; i++ {
-		currHash := data.hash[i]
+	for i, count := uint32(0), hdr.count; i < MAX_SLOTS && count > 0; i++ {
+		currHash := data.tophash[i]
+		tophash := uint8(hash >> HASH_SHIFT)
+		// Top COULD be 0
+		if tophash == 0 {
+			tophash += 1
+		}
 
 		// We skip any empty hashes, but keep note of how many non-empty we find to know when to stop early
 		if currHash == EMPTY {
@@ -1259,8 +1338,8 @@ next:
 		count--
 
 		// Check if the hashes are equal
-		if currHash == hash {
-			otherKey := data.key(t, uintptr(i))
+		if currHash == tophash {
+			otherKey := data.key(t, i)
 
 			// Perform indirection on otherKey if necessary
 			if t.indirectkey {
@@ -1269,7 +1348,7 @@ next:
 
 			// If the keys are equal
 			if equal(key, otherKey) {
-				return data.value(t, uintptr(i)), true
+				return data.value(t, i), true
 			}
 		}
 	}
@@ -1393,7 +1472,7 @@ next:
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 
 	// Save time by looking ahead of time (testing) if the header or if the bucket is empty
-	if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+	if hdr == nil || atomic.Load(&hdr.count) == 0 {
 		return
 	}
 
@@ -1413,7 +1492,7 @@ next:
 			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all)
 			// hdr.count == 0 if another Goroutine has created a new bucketData after the old became INVALID. In this
 			// case, there's still nothing here for us.
-			if hdr == nil || atomic.Loaduintptr(&hdr.count) == 0 {
+			if hdr == nil || atomic.Load(&hdr.count) == 0 {
 				return
 			}
 			// Loop again.
@@ -1498,20 +1577,26 @@ next:
 	}
 
 	data := (*bucketData)(unsafe.Pointer(hdr))
+	count := atomic.Load(&hdr.count)
 
 	// TODO: Document
-	for i, count := 0, hdr.count; i < MAX_SLOTS && count > 0; i++ {
-		currHash := data.hash[i]
+	for i, cnt := uint32(0), count; i < MAX_SLOTS && cnt > 0; i++ {
+		currHash := data.tophash[i]
+		tophash := uint8(hash >> HASH_SHIFT)
+		// Top COULD be 0
+		if tophash == 0 {
+			tophash += 1
+		}
 
 		// TODO: Document
 		if currHash == EMPTY {
 			continue
 		}
-		count--
+		cnt--
 
 		// If the hash matches, we can compare
-		if currHash == hash {
-			otherKey := data.key(t, uintptr(i))
+		if currHash == tophash {
+			otherKey := data.key(t, i)
 
 			// Perform indirection on otherKey if necessary
 			if t.indirectkey {
@@ -1520,11 +1605,11 @@ next:
 
 			// If they match, we are set to remove them from the bucket
 			if t.key.alg.equal(key, otherKey) {
-				memclr(data.key(t, uintptr(i)), uintptr(t.keysize))
-				memclr(data.value(t, uintptr(i)), uintptr(t.valuesize))
-				data.hash[i] = EMPTY
+				memclr(data.key(t, i), uintptr(t.keysize))
+				memclr(data.value(t, i), uintptr(t.valuesize))
+				data.tophash[i] = EMPTY
 				atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), -1)
-				atomic.Xadduintptr(&hdr.count, ^uintptr(0))
+				atomic.Xadd(&hdr.count, -1)
 				break
 			}
 		}
@@ -1532,14 +1617,14 @@ next:
 
 	// If this bucketData is empty, we release it, making it eaiser for the iterator to determine it is empty.
 	// For emphasis: If we removed the last element, we delete the bucketData.
-	if hdr.count == 0 {
+	if count == 0 {
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil)
 		// arr.buckets[idx] = nil
 		atomic.Storeuintptr(&hdr.lock, INVALID)
 		g.releaseBucket = nil
 
 		// Also decrement number of buckets
-		atomic.Xadduintptr(&arr.count, ^uintptr(0))
+		atomic.Xadd(&arr.count, -1)
 	}
 }
 
@@ -1601,22 +1686,22 @@ test:
 		newHdr.lock = gptr
 		newHdr.parent = arr
 		newHdr.parentIdx = uint32(idx)
-		newHdr.count = uintptr(1)
+		newHdr.count = uint32(1)
 		// If we fail, then some other Goroutine has already placed theirs.
 		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 			// If we succeed, then we own this bucket and need to keep track of it
 			info.hdr = newHdr
 			// Also increment count of buckets
-			atomic.Xadduintptr(&arr.count, 1)
+			atomic.Xadd(&arr.count, 1)
 			atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 
 			// Since we just created this bucket, we can easily assign to the first slot.
 			data := (*bucketData)(unsafe.Pointer(newHdr))
-			data.assign(t, uintptr(0), hash, key, nil)
+			data.assign(t, uint32(0), hash, key, nil)
 
-			info.key = data.key(t, uintptr(0))
-			info.value = data.value(t, uintptr(0))
-			info.hash = &data.hash[0]
+			info.key = data.key(t, uint32(0))
+			info.value = data.value(t, uint32(0))
+			info.hash = &data.tophash[0]
 
 			// Mark as being not-present so it will be cleaned up if the user never assigns to it.
 			info.flags |= KEY_DELETED
@@ -1704,26 +1789,32 @@ test:
 	// If we do not find the requested key to interlock, we must create a new key for the user... same song and dance
 	// as cmapassign....
 	// Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
-	for i, count := 0, hdr.count; i < MAX_SLOTS && count > 0; i++ {
-		currHash := data.hash[i]
+	for i, count := uint32(0), hdr.count; i < MAX_SLOTS && count > 0; i++ {
+		currHash := data.tophash[i]
+		tophash := uint8(hash >> HASH_SHIFT)
+		// Top COULD be 0
+		if tophash == 0 {
+			tophash += 1
+		}
+
 		if currHash == EMPTY {
 			// Keep track of the first empty so we know what to assign into if we do not find a match
 			if firstEmpty == -1 {
-				firstEmpty = i
+				firstEmpty = int(i)
 			}
 			continue
 		}
 		count--
 
 		// If the hash matches, check to see if keys are equal
-		if hash == data.hash[i] {
-			otherKey := data.key(t, uintptr(i))
+		if tophash == currHash {
+			otherKey := data.key(t, i)
 
 			// If they are equal, keep track of the respective key, value and hash.
 			if t.key.alg.equal(key, otherKey) {
-				info.key = data.key(t, uintptr(i))
-				info.value = data.value(t, uintptr(i))
-				info.hash = &data.hash[i]
+				info.key = data.key(t, i)
+				info.value = data.value(t, i)
+				info.hash = &data.tophash[i]
 
 				return
 			}
@@ -1742,9 +1833,9 @@ test:
 		newArr.parentIdx = uint32(idx)
 
 		// Rehash and move all key-value pairs
-		for i := 0; i < MAX_SLOTS; i++ {
-			k := data.key(t, uintptr(i))
-			v := data.value(t, uintptr(i))
+		for i := uint32(0); i < uint32(MAX_SLOTS); i++ {
+			k := data.key(t, i)
+			v := data.value(t, i)
 
 			// Rehash the key to the new seed
 			newHash := t.key.alg.hash(k, uintptr(newArr.seed))
@@ -1767,10 +1858,10 @@ test:
 			}
 
 			// If it is not nil, then we must scan for the first non-empty slot
-			for j := 0; j < MAX_SLOTS; j++ {
-				currHash := newData.hash[j]
+			for j := uint32(0); j < uint32(MAX_SLOTS); j++ {
+				currHash := newData.tophash[j]
 				if currHash == EMPTY {
-					newData.assign(t, uintptr(j), newHash, k, v)
+					newData.assign(t, j, newHash, k, v)
 					newData.count++
 					break
 				}
@@ -1778,7 +1869,7 @@ test:
 		}
 
 		// Now dispose of old data and update the header's bucket; We have to be careful to NOT overwrite the header portion
-		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(sys.PtrSize)+uintptr(t.keysize)+uintptr(t.valuesize)))
+		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(1)+uintptr(t.keysize)+uintptr(t.valuesize)))
 		// Update and then invalidate to point to nested ARRAY
 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
@@ -1800,13 +1891,13 @@ test:
 	}
 	// TODO: What if t.indirectvalue is true? Correct this!
 	// At this point, firstEmpty is guaranteed to be non-zero and within bounds, hence we can safely assign to it
-	data.assign(t, uintptr(firstEmpty), hash, key, unsafe.Pointer(&DUMMY_RETVAL[0]))
-	info.key = data.key(t, uintptr(firstEmpty))
-	info.value = data.value(t, uintptr(firstEmpty))
-	info.hash = &data.hash[uintptr(firstEmpty)]
+	data.assign(t, uint32(firstEmpty), hash, key, unsafe.Pointer(&DUMMY_RETVAL[0]))
+	info.key = data.key(t, uint32(firstEmpty))
+	info.value = data.value(t, uint32(firstEmpty))
+	info.hash = &data.tophash[uint32(firstEmpty)]
 	info.flags |= KEY_DELETED
 	// Since we just assigned to a new empty slot, we need to increment count
-	atomic.Xadduintptr(&hdr.count, 1)
+	atomic.Xadd(&hdr.count, 1)
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 }
 
@@ -2038,7 +2129,7 @@ func cmapassign_interlocked(t *maptype, info *interlockedInfo, h *hmap, key, val
 		typedmemmove(t.elem, v, value)
 
 		// Increment since we decrement when we originally delete it.
-		atomic.Xadduintptr(&info.hdr.count, 1)
+		atomic.Xadd(&info.hdr.count, 1)
 		atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 	}
 }
@@ -2077,7 +2168,7 @@ func cmapdelete_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsa
 	info.flags |= KEY_DELETED
 	memclr(info.value, uintptr(t.valuesize))
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), -1)
-	atomic.Xadduintptr(&info.hdr.count, ^uintptr(0))
+	atomic.Xadd(&info.hdr.count, -1)
 }
 
 /*
@@ -2103,7 +2194,7 @@ func maprelease_interlocked(t *maptype, h *hmap) {
 	if (info.flags & KEY_DELETED) != 0 {
 		memclr(unsafe.Pointer(info.key), uintptr(t.keysize))
 		*info.hash = EMPTY
-		atomic.Xadduintptr(&info.hdr.count, ^uintptr(0))
+		atomic.Xadd(&info.hdr.count, -1)
 	}
 
 	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
@@ -2113,7 +2204,7 @@ func maprelease_interlocked(t *maptype, h *hmap) {
 		atomic.Storeuintptr(&info.hdr.lock, INVALID)
 
 		// Also decrement number of buckets
-		atomic.Xadduintptr(&info.hdr.parent.count, ^uintptr(0))
+		atomic.Xadd(&info.hdr.parent.count, -1)
 	} else {
 		// Otherwise, just release the lock on the bucket
 		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
@@ -2451,7 +2542,7 @@ func interlocked(t *maptype, h *hmap, key unsafe.Pointer) {
 	// 		}
 
 	// 		// Now dispose of old data and update the header's bucket; We have to be careful to NOT overwrite the header portion
-	// 		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(sys.PtrSize)+uintptr(t.keysize)+uintptr(t.valuesize)))
+	// 		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(1)+uintptr(t.keysize)+uintptr(t.valuesize)))
 	// 		// Update and then invalidate to point to nested ARRAY
 	// 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
 	// 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))

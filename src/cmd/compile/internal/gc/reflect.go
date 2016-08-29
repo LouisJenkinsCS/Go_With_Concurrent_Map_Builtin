@@ -288,7 +288,7 @@ func interlockedInfo(t *Type) *Type {
 	field[1] = makefield("hdr", Ptrto(bucketHdr(t)))
 	field[2] = makefield("key", Types[TUNSAFEPTR])
 	field[3] = makefield("value", Types[TUNSAFEPTR])
-	field[4] = makefield("hash", Ptrto(Types[TUINTPTR]))
+	field[4] = makefield("hash", Ptrto(Types[TUINT8]))
 	field[5] = makefield("flags", Types[TUINTPTR])
 
 	info.SetFields(field[:])
@@ -328,16 +328,15 @@ func bucketData(t *Type) *Type {
 	keyArr.Noalg = true
 	valArr.Noalg = true
 
-	var field [9]*Field
+	var field [8]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
-	field[1] = makefield("count", Types[TUINTPTR])
-	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
-	field[3] = makefield("parentIdx", Types[TUINT32])
-	field[4] = makefield("_pad2", Types[TUINT32])
-	field[5] = makefield("parent", Types[TUNSAFEPTR])
-	field[6] = makefield("hash", typArray(Types[TUINTPTR], int64(nChains)))
-	field[7] = makefield("keys", keyArr)
-	field[8] = makefield("values", valArr)
+	field[1] = makefield("count", Types[TUINT32])
+	field[2] = makefield("parentIdx", Types[TUINT32])
+	field[3] = makefield("parent", Types[TUNSAFEPTR])
+	field[4] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr-8)))
+	field[5] = makefield("tophash", typArray(Types[TUINT8], int64(nChains)))
+	field[6] = makefield("keys", keyArr)
+	field[7] = makefield("values", valArr)
 
 	bdata.SetFields(field[:])
 	dowidth(bdata)
@@ -355,13 +354,12 @@ func bucketHdr(t *Type) *Type {
 
 	bhdr := typ(TSTRUCT)
 
-	var field [6]*Field
+	var field [5]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
-	field[1] = makefield("count", Types[TUINTPTR])
-	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
-	field[3] = makefield("parentIdx", Types[TUINT32])
-	field[4] = makefield("_pad2", Types[TUINT32])
-	field[5] = makefield("parent", Types[TUNSAFEPTR])
+	field[1] = makefield("count", Types[TUINT32])
+	field[2] = makefield("parentIdx", Types[TUINT32])
+	field[3] = makefield("parent", Types[TUNSAFEPTR])
+	field[4] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr-8)))
 
 	bhdr.Noalg = true
 	bhdr.Local = t.Local
@@ -381,15 +379,14 @@ func bucketArray(t *Type) *Type {
 	barr := typ(TSTRUCT)
 	barr.Noalg = true
 
-	var field [8]*Field
+	var field [7]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
-	field[1] = makefield("count", Types[TUINTPTR])
-	field[2] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr)))
-	field[3] = makefield("parentIdx", Types[TUINT32])
-	field[4] = makefield("_pad2", Types[TUINT32])
-	field[5] = makefield("parent", Types[TUNSAFEPTR])
-	field[6] = makefield("seed", Types[TUINT32])
-	field[7] = makefield("buckets", typSlice(Ptrto(bucketHdr(t))))
+	field[1] = makefield("count", Types[TUINT32])
+	field[2] = makefield("parentIdx", Types[TUINT32])
+	field[3] = makefield("parent", Types[TUNSAFEPTR])
+	field[4] = makefield("_pad", typArray(Types[TUINT8], int64(cacheLineSize()-2*Widthptr-8)))
+	field[5] = makefield("seed", Types[TUINT32])
+	field[6] = makefield("buckets", typSlice(Ptrto(bucketHdr(t))))
 
 	barr.SetFields(field[:])
 	dowidth(barr)

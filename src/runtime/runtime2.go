@@ -754,7 +754,7 @@ type interlockedInfo struct {
 	// The pointer to the value inside of the hdr, for fast access.
 	value unsafe.Pointer
 	// The pointer to the 'hash' inside of the hdr, for fast access.
-	hash *uintptr
+	hash *uint8
 	// Extra flags
 	flags uintptr
 }

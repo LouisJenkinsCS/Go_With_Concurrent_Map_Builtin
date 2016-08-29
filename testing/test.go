@@ -127,6 +127,8 @@ func main() {
 		delete(m, k)
 	}
 
+	fmt.Println("Finished checking elements.")
+
 	for k, v := range checkMap {
 		if !v {
 			fmt.Printf("Missed Key: %v\n", k)
