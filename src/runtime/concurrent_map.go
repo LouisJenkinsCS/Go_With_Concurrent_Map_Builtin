@@ -174,9 +174,6 @@ var DUMMY_RETVAL [MAXZERO]byte
 
 /*
 	bucketHdr is the header that serves three purposes. bucketHdr can be cast to and from bucketData and bucketArray.
-	The bucketHdr also ensures it remains in it's own cache-line, so accessing it does not invalidate
-	the data it actually described.
-
 	Descriptor:
 		bucketHdr is a descriptor for the body of the bucketHdr, and can be casted to and from it's header to it's corresponding actual type
 		based on the information it holds.
@@ -195,8 +192,6 @@ type bucketHdr struct {
 	parentIdx uint32
 	// The parent bucketArray we belong to; nil if we are the root.
 	parent *bucketArray
-	// Prevent false sharing
-	_ [sys.CacheLineSize - 2*sys.PtrSize - 8]byte
 }
 
 /*
@@ -211,7 +206,6 @@ type bucketArray struct {
 	count     uint32
 	parentIdx uint32
 	parent    *bucketArray
-	_         [sys.CacheLineSize - 2*sys.PtrSize - 8]byte
 
 	// Seed is different for each bucketArray to ensure that the re-hashing resolves to different indice
 	seed uint32
@@ -230,7 +224,6 @@ type bucketData struct {
 	count     uint32
 	parentIdx uint32
 	parent    *bucketArray
-	_         [sys.CacheLineSize - 2*sys.PtrSize - 8]byte
 
 	// Hash of the key-value corresponding to this index. If it is 0, it is empty. Top byte to reduce overall size.
 	tophash [MAX_SLOTS]uint8
