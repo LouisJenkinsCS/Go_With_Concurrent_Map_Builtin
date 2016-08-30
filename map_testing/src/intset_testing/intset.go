@@ -4,6 +4,8 @@ import "sync"
 import "math/rand"
 import "time"
 import "settings"
+import "strconv"
+import cmap "github.com/streamrail/concurrent-map"
 
 func ConcurrentIntset(nGoroutines int64) int64 {
 	cmap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE, nGoroutines)
@@ -33,6 +35,37 @@ func ConcurrentIntset(nGoroutines int64) int64 {
 			// INSERT <= rngRatio <= 1 -> Do Remove
 			default:
 				delete(cmap, randNum)
+			}
+		}
+	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+}
+
+func StreamrailConcurrentIntset(nGoroutines int64) int64 {
+	scmap := cmap.New()
+
+	return settings.ParallelTest(int(nGoroutines), func() {
+		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+		maxElements := settings.INTSET_VALUE_RANGE / 4
+
+		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+			rngRatio := rng.Float64()
+			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
+			switch {
+			// 0 <= rngRatio < LOOKUP -> Do Lookup
+			case rngRatio < settings.INTSET_FAIR_LOOKUP_RATIO:
+				scmap.Get(strconv.FormatInt(randNum, 10))
+			// LOOKUP <= rngRatio < INSERT -> Do Insert
+			case rngRatio < settings.INTSET_FAIR_INSERT_RATIO+settings.INTSET_FAIR_LOOKUP_RATIO:
+				if uint64(scmap.Count()) < maxElements {
+					scmap.Set(strconv.FormatInt(randNum, 10), settings.UNUSED)
+					continue
+				}
+
+				// If we have too many elements fall through to delete
+				fallthrough
+			// INSERT <= rngRatio <= 1 -> Do Remove
+			default:
+				scmap.Remove(strconv.FormatInt(randNum, 10))
 			}
 		}
 	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))

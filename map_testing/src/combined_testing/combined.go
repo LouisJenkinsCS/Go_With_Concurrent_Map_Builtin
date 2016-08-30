@@ -3,9 +3,12 @@ package combined_testing
 import (
 	"math/rand"
 	"settings"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	cmap "github.com/streamrail/concurrent-map"
 )
 
 func ConcurrentCombined(nGoroutines int64) int64 {
@@ -47,6 +50,54 @@ func ConcurrentCombined(nGoroutines int64) int64 {
 				for k, v := range cmap {
 					k++
 					v++
+					nOps++
+				}
+			}
+		}
+
+		// Add our number of operations to the total number of Operations
+		atomic.AddInt64(&totalOps, nOps)
+	}).Nanoseconds() / totalOps
+}
+
+func StreamrailConcurrentCombined(nGoroutines int64) int64 {
+	scmap := cmap.New()
+
+	// Fill map to reduce overhead of resizing
+	for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
+		scmap.Set(strconv.FormatInt(i, 10), settings.UNUSED)
+	}
+	for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
+		scmap.Remove(strconv.FormatInt(i, 10))
+	}
+
+	var totalOps int64
+	return settings.ParallelTest(int(nGoroutines), func() {
+		var nOps int64
+		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+
+		for i := int64(0); i < settings.COMBINED_OPS_PER_GOROUTINE; i++ {
+			randRatio := rng.Float64()
+			randNum := rng.Int63n(settings.COMBINED_KEY_RANGE)
+			switch {
+			// 0 <= randRatio < .25 -> Insert
+			case randRatio < settings.COMBINED_FAIR_RATIO:
+				scmap.Set(strconv.FormatInt(randNum, 10), settings.UNUSED)
+				nOps++
+			// .25 <= randRatio < .5 -> Delete
+			case randRatio < 2*settings.COMBINED_FAIR_RATIO:
+				scmap.Remove(strconv.FormatInt(randNum, 10))
+				nOps++
+			// .5 <= randRatio < .75 -> Lookup
+			case randRatio < 3*settings.COMBINED_FAIR_RATIO:
+				scmap.Get(strconv.FormatInt(randNum, 10))
+				nOps++
+			// .75 <= randRatio < 1 -> Iterate
+			default:
+				// Each iteration counts as an operation (as it calls mapiternext)
+				for item := range scmap.Iter() {
+					_ = item.Key
+					_ = item.Val
 					nOps++
 				}
 			}

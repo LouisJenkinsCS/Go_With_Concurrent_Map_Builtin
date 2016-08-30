@@ -283,7 +283,7 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrency
 // NOTE: The returned pointer may keep the whole map live, so don't
 // hold onto it for very long.
 func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
-	if (h.flags & concurrent) != 0 {
+	if h != nil && (h.flags&concurrent) != 0 {
 		return cmapaccess1(t, h, key)
 	}
 
@@ -341,7 +341,7 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 }
 
 func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
-	if (h.flags & concurrent) != 0 {
+	if h != nil && (h.flags&concurrent) != 0 {
 		return cmapaccess2(t, h, key)
 	}
 
@@ -400,7 +400,7 @@ func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) 
 
 // returns both key and value. Used by map iterator
 func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe.Pointer) {
-	if (h.flags & concurrent) != 0 {
+	if h != nil && (h.flags&concurrent) != 0 {
 		throw("Concurrent Access Provided!")
 	}
 
@@ -587,7 +587,7 @@ done:
 }
 
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
-	if (h.flags & concurrent) != 0 {
+	if h != nil && (h.flags&concurrent) != 0 {
 		cmapdelete(t, h, key)
 		return
 	}
