@@ -146,6 +146,10 @@ func main() {
 					"Streamrail Concurrent Map",
 				},
 				benchmark{
+					intset_testing.GotomicConcurrentIntset,
+					"Gotomic Concurrent Map",
+				},
+				benchmark{
 					intset_testing.SynchronizedIntset,
 					"Synchronized Map (Mutex)",
 				},
@@ -167,6 +171,10 @@ func main() {
 				},
 				benchmark{
 					iterator_testing.StreamrailConcurrentIterator_RO,
+					"Streamrail Concurrent Map",
+				},
+				benchmark{
+					iterator_testing.GotomicConcurrentIterator_RO,
 					"Streamrail Concurrent Map",
 				},
 				benchmark{
@@ -208,6 +216,10 @@ func main() {
 				benchmark{
 					combined_testing.StreamrailConcurrentCombined,
 					"Streamrail Concurrent Map",
+				},
+				benchmark{
+					combined_testing.GotomicConcurrentCombined,
+					"Gotomic Concurrent Map",
 				},
 				benchmark{
 					combined_testing.SynchronizedCombined,

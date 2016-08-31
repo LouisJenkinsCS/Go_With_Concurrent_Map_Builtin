@@ -9,6 +9,7 @@ import (
 	"time"
 
 	cmap "github.com/streamrail/concurrent-map"
+	gotomic "github.com/zond/gotomic"
 )
 
 func ConcurrentCombined(nGoroutines int64) int64 {
@@ -100,6 +101,55 @@ func StreamrailConcurrentCombined(nGoroutines int64) int64 {
 					_ = item.Val
 					nOps++
 				}
+			}
+		}
+
+		// Add our number of operations to the total number of Operations
+		atomic.AddInt64(&totalOps, nOps)
+	}).Nanoseconds() / totalOps
+}
+
+func GotomicConcurrentCombined(nGoroutines int64) int64 {
+	gcmap := gotomic.NewHash()
+
+	// Fill map to reduce overhead of resizing
+	for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
+		gcmap.Put(gotomic.IntKey(int(i)), settings.UNUSED)
+	}
+	for i := int64(0); i < settings.COMBINED_KEY_RANGE; i++ {
+		gcmap.Delete(gotomic.IntKey(int(i)))
+	}
+
+	var totalOps int64
+	return settings.ParallelTest(int(nGoroutines), func() {
+		var nOps int64
+		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+
+		for i := int64(0); i < settings.COMBINED_OPS_PER_GOROUTINE; i++ {
+			randRatio := rng.Float64()
+			randNum := rng.Int63n(settings.COMBINED_KEY_RANGE)
+			switch {
+			// 0 <= randRatio < .25 -> Insert
+			case randRatio < settings.COMBINED_FAIR_RATIO:
+				gcmap.Put(gotomic.IntKey(int(randNum)), settings.UNUSED)
+				nOps++
+			// .25 <= randRatio < .5 -> Delete
+			case randRatio < 2*settings.COMBINED_FAIR_RATIO:
+				gcmap.Delete(gotomic.IntKey(int(randNum)))
+				nOps++
+			// .5 <= randRatio < .75 -> Lookup
+			case randRatio < 3*settings.COMBINED_FAIR_RATIO:
+				gcmap.Get(gotomic.IntKey(int(randNum)))
+				nOps++
+			// .75 <= randRatio < 1 -> Iterate
+			default:
+				// Each iteration counts as an operation (as it calls mapiternext)
+				gcmap.Each(func(k gotomic.Hashable, v gotomic.Thing) bool {
+					_ = k
+					_ = v
+					nOps++
+					return true
+				})
 			}
 		}
 

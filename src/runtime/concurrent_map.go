@@ -785,8 +785,26 @@ pollSkippedBuckets:
 	it.key = nil
 	it.value = nil
 
-	// Pop our info off the stack.
-	g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
+	interlocked_release(it.h)
+}
+
+func interlocked_release(h *hmap) {
+	g := getg()
+	for idx, info := range g.interlockedData {
+		// This is the one we're looking for...
+		if info.cmap == h.chdr {
+			// To get rid of the header, all we have to do is ensure that all valid interlockedInfo are not
+			// at the end of the structure, as we are going to be popping it off.
+			end := len(g.interlockedData) - 1
+			if end != idx {
+				g.interlockedData[idx] = g.interlockedData[end]
+			}
+			// Pop
+			g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
+			return
+		}
+	}
+	panic("Interlocked info not found for map!!!")
 }
 
 /*
@@ -2203,7 +2221,7 @@ func maprelease_interlocked(t *maptype, h *hmap) {
 		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
 	}
 
-	g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
+	interlocked_release(h)
 }
 
 /*
@@ -2471,7 +2489,7 @@ func interlocked(t *maptype, h *hmap, key unsafe.Pointer) {
 	// 				fn(value, true)
 
 	// 				// Pop
-	// 				g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
+	// 				interlocked_release(h)
 
 	// 				// Release lock on hdr
 	// 				atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
@@ -2580,7 +2598,7 @@ func interlocked(t *maptype, h *hmap, key unsafe.Pointer) {
 	// 	fn(value, false)
 
 	// 	// Pop
-	// 	g.interlockedData = g.interlockedData[:len(g.interlockedData)-1]
+	// 	interlocked_release(h)
 
 	// 	// Release lock on hdr
 	// 	atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)

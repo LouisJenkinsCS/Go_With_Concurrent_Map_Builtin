@@ -6,6 +6,7 @@ import "time"
 import "settings"
 import "strconv"
 import cmap "github.com/streamrail/concurrent-map"
+import "github.com/zond/gotomic"
 
 func ConcurrentIntset(nGoroutines int64) int64 {
 	cmap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE, nGoroutines)
@@ -66,6 +67,37 @@ func StreamrailConcurrentIntset(nGoroutines int64) int64 {
 			// INSERT <= rngRatio <= 1 -> Do Remove
 			default:
 				scmap.Remove(strconv.FormatInt(randNum, 10))
+			}
+		}
+	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+}
+
+func GotomicConcurrentIntset(nGoroutines int64) int64 {
+	gcmap := gotomic.NewHash()
+
+	return settings.ParallelTest(int(nGoroutines), func() {
+		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
+		maxElements := settings.INTSET_VALUE_RANGE / 4
+
+		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+			rngRatio := rng.Float64()
+			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
+			switch {
+			// 0 <= rngRatio < LOOKUP -> Do Lookup
+			case rngRatio < settings.INTSET_FAIR_LOOKUP_RATIO:
+				gcmap.Get(gotomic.IntKey(int(randNum)))
+			// LOOKUP <= rngRatio < INSERT -> Do Insert
+			case rngRatio < settings.INTSET_FAIR_INSERT_RATIO+settings.INTSET_FAIR_LOOKUP_RATIO:
+				if uint64(gcmap.Size()) < maxElements {
+					gcmap.Put(gotomic.IntKey(int(randNum)), settings.UNUSED)
+					continue
+				}
+
+				// If we have too many elements fall through to delete
+				fallthrough
+			// INSERT <= rngRatio <= 1 -> Do Remove
+			default:
+				gcmap.Delete(gotomic.IntKey(int(randNum)))
 			}
 		}
 	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
