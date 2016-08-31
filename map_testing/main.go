@@ -175,7 +175,7 @@ func main() {
 				},
 				benchmark{
 					iterator_testing.GotomicConcurrentIterator_RO,
-					"Streamrail Concurrent Map",
+					"Gotomic Concurrent Map",
 				},
 				benchmark{
 					iterator_testing.DefaultIterator_RO,

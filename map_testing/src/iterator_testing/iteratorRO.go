@@ -60,7 +60,7 @@ func GotomicConcurrentIterator_RO(nGoroutines int64) int64 {
 			gcmap.Each(func(k gotomic.Hashable, v gotomic.Thing) bool {
 				_ = k
 				_ = v
-				return true
+				return false
 			})
 		}
 	}).Nanoseconds() / int64(int64(nGoroutines)*settings.ITERATOR_NUM_ELEMS*int64(settings.ITERATOR_NUM_ITERATIONS))

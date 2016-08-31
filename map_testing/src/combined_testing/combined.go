@@ -148,7 +148,7 @@ func GotomicConcurrentCombined(nGoroutines int64) int64 {
 					_ = k
 					_ = v
 					nOps++
-					return true
+					return false
 				})
 			}
 		}
