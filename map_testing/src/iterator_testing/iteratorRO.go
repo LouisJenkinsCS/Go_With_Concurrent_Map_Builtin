@@ -1,15 +1,17 @@
 package iterator_testing
 
 import (
+	"runtime"
 	"settings"
 	"strconv"
+	"testing"
 
 	cmap "github.com/streamrail/concurrent-map"
 	"github.com/zond/gotomic"
 )
 
-func ConcurrentIterator_RO(nGoroutines int64) int64 {
-	cmap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS, nGoroutines)
+func BenchmarkConcurrentIterator_RO(b *testing.B) {
+	cmap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS, runtime.GOMAXPROCS(0))
 
 	// Initialize the map with a fixed number of elements.
 	for i := int64(0); i < settings.ITERATOR_NUM_ELEMS; i++ {
@@ -17,17 +19,18 @@ func ConcurrentIterator_RO(nGoroutines int64) int64 {
 	}
 
 	// Begin iteration test
-	return settings.ParallelTest(int(nGoroutines), func() {
-		for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
 			for k, v := range cmap {
 				k++
 				v++
 			}
 		}
-	}).Nanoseconds() / int64(int64(nGoroutines)*settings.ITERATOR_NUM_ELEMS*int64(settings.ITERATOR_NUM_ITERATIONS))
+	})
 }
 
-func StreamrailConcurrentIterator_RO(nGoroutines int64) int64 {
+func BenchmarkStreamrailConcurrentIterator_RO(b *testing.B) {
 	scmap := cmap.New()
 
 	// Initialize the map with a fixed number of elements.
@@ -36,17 +39,18 @@ func StreamrailConcurrentIterator_RO(nGoroutines int64) int64 {
 	}
 
 	// Begin iteration test
-	return settings.ParallelTest(int(nGoroutines), func() {
-		for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
 			for item := range scmap.Iter() {
 				_ = item.Key
 				_ = item.Val
 			}
 		}
-	}).Nanoseconds() / int64(int64(nGoroutines)*settings.ITERATOR_NUM_ELEMS*int64(settings.ITERATOR_NUM_ITERATIONS))
+	})
 }
 
-func GotomicConcurrentIterator_RO(nGoroutines int64) int64 {
+func BenchmarkGotomicConcurrentIterator_RO(b *testing.B) {
 	gcmap := gotomic.NewHash()
 
 	// Initialize the map with a fixed number of elements.
@@ -55,18 +59,19 @@ func GotomicConcurrentIterator_RO(nGoroutines int64) int64 {
 	}
 
 	// Begin iteration test
-	return settings.ParallelTest(int(nGoroutines), func() {
-		for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
 			gcmap.Each(func(k gotomic.Hashable, v gotomic.Thing) bool {
 				_ = k
 				_ = v
 				return false
 			})
 		}
-	}).Nanoseconds() / int64(int64(nGoroutines)*settings.ITERATOR_NUM_ELEMS*int64(settings.ITERATOR_NUM_ITERATIONS))
+	})
 }
 
-func DefaultIterator_RO(nGoroutines int64) int64 {
+func BenchmarkDefaultIterator_RO(b *testing.B) {
 	smap := make(map[int64]settings.Unused, settings.ITERATOR_NUM_ELEMS)
 
 	// Initialize the map with a fixed number of elements.
@@ -75,12 +80,13 @@ func DefaultIterator_RO(nGoroutines int64) int64 {
 	}
 
 	// Begin iteration test
-	return settings.ParallelTest(int(nGoroutines), func() {
-		for i := uint64(0); i < settings.ITERATOR_NUM_ITERATIONS; i++ {
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
 			for k, v := range smap {
 				k++
 				v++
 			}
 		}
-	}).Nanoseconds() / int64(int64(nGoroutines)*settings.ITERATOR_NUM_ELEMS*int64(settings.ITERATOR_NUM_ITERATIONS))
+	})
 }

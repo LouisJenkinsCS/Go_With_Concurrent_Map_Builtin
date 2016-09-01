@@ -1,21 +1,28 @@
 package intset_testing
 
-import "sync"
-import "math/rand"
-import "time"
-import "settings"
+import (
+	"math/rand"
+	"runtime"
+	"settings"
+	"sync"
+	"testing"
+	"time"
+
+	cmap "github.com/streamrail/concurrent-map"
+	"github.com/zond/gotomic"
+)
+
 import "strconv"
-import cmap "github.com/streamrail/concurrent-map"
-import "github.com/zond/gotomic"
 
-func ConcurrentIntset(nGoroutines int64) int64 {
-	cmap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE, nGoroutines)
+func BenchmarkConcurrentIntset(b *testing.B) {
+	cmap := make(map[int64]settings.Unused, settings.COMBINED_KEY_RANGE, runtime.GOMAXPROCS(0))
 
-	return settings.ParallelTest(int(nGoroutines), func() {
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 		maxElements := settings.INTSET_VALUE_RANGE / 4
 
-		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+		for pb.Next() {
 			rngRatio := rng.Float64()
 			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
 			switch {
@@ -38,17 +45,17 @@ func ConcurrentIntset(nGoroutines int64) int64 {
 				delete(cmap, randNum)
 			}
 		}
-	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+	})
 }
 
-func StreamrailConcurrentIntset(nGoroutines int64) int64 {
+func BenchmarkStreamrailConcurrentIntset(b *testing.B) {
 	scmap := cmap.New()
 
-	return settings.ParallelTest(int(nGoroutines), func() {
+	b.RunParallel(func(pb *testing.PB) {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 		maxElements := settings.INTSET_VALUE_RANGE / 4
 
-		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+		for pb.Next() {
 			rngRatio := rng.Float64()
 			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
 			switch {
@@ -69,17 +76,17 @@ func StreamrailConcurrentIntset(nGoroutines int64) int64 {
 				scmap.Remove(strconv.FormatInt(randNum, 10))
 			}
 		}
-	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+	})
 }
 
-func GotomicConcurrentIntset(nGoroutines int64) int64 {
+func BenchmarkGotomicConcurrentIntset(b *testing.B) {
 	gcmap := gotomic.NewHash()
 
-	return settings.ParallelTest(int(nGoroutines), func() {
+	b.RunParallel(func(pb *testing.PB) {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 		maxElements := settings.INTSET_VALUE_RANGE / 4
 
-		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+		for pb.Next() {
 			rngRatio := rng.Float64()
 			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
 			switch {
@@ -100,18 +107,18 @@ func GotomicConcurrentIntset(nGoroutines int64) int64 {
 				gcmap.Delete(gotomic.IntKey(int(randNum)))
 			}
 		}
-	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+	})
 }
 
-func SynchronizedIntset(nGoroutines int64) int64 {
+func BenchmarkSynchronizedIntset(b *testing.B) {
 	smap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE)
 	mtx := sync.Mutex{}
 
-	return settings.ParallelTest(int(nGoroutines), func() {
+	b.RunParallel(func(pb *testing.PB) {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 		maxElements := settings.INTSET_VALUE_RANGE
 
-		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+		for pb.Next() {
 			rngRatio := rng.Float64()
 			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
 			switch {
@@ -141,18 +148,18 @@ func SynchronizedIntset(nGoroutines int64) int64 {
 				mtx.Unlock()
 			}
 		}
-	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+	})
 }
 
-func ReaderWriterIntset(nGoroutines int64) int64 {
+func BenchmarkReaderWriterIntset(b *testing.B) {
 	rwmap := make(map[int64]settings.Unused, settings.INTSET_VALUE_RANGE)
 	mtx := sync.RWMutex{}
 
-	return settings.ParallelTest(int(nGoroutines), func() {
+	b.RunParallel(func(pb *testing.PB) {
 		rng := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
 		maxElements := settings.INTSET_VALUE_RANGE / 4
 
-		for i := uint64(0); i < settings.INTSET_OPS_PER_GOROUTINE; i++ {
+		for pb.Next() {
 			rngRatio := rng.Float64()
 			randNum := rng.Int63n(int64(settings.INTSET_VALUE_RANGE))
 			switch {
@@ -182,5 +189,5 @@ func ReaderWriterIntset(nGoroutines int64) int64 {
 				mtx.Unlock()
 			}
 		}
-	}).Nanoseconds() / int64(settings.INTSET_OPS_PER_GOROUTINE*uint64(nGoroutines))
+	})
 }

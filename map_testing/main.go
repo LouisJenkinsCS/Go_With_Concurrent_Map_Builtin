@@ -1,14 +1,17 @@
 package main
 
-import "fmt"
-import "intset_testing"
-import "iterator_testing"
-import "combined_testing"
-import "strconv"
-import "strings"
-import "flag"
-
-import "os"
+import (
+	"combined_testing"
+	"flag"
+	"fmt"
+	"intset_testing"
+	"iterator_testing"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) float64 {
 	nsOp := callback(nGoroutines)
@@ -25,7 +28,7 @@ type benchmarks struct {
 }
 
 type benchmark struct {
-	callback func(nGoroutines int64) int64
+	callback func(b *testing.B)
 	rowName  string
 }
 
@@ -83,16 +86,18 @@ func runBenchmark(barr []benchmarks) {
 			file.WriteString(b.rowName)
 			fmt.Printf("Section: %v\n", b.rowName)
 			// Run the benchmark for all Goroutines and trials.
+			oldGMP := runtime.GOMAXPROCS(0)
 			for _, info := range bm.info {
 				nGoroutines := info.nGoroutines
 				fmt.Printf("Goroutines: %v\n", nGoroutines)
+				runtime.GOMAXPROCS(int(nGoroutines))
 
 				// Keep track of all benchmark results, as we'll be taking the average after all trials are ran.
 				nsPerOp := int64(0)
 
 				for i := int64(0); i < info.trials; i++ {
 					fmt.Printf("\rTrial %v/%v", i+1, info.trials)
-					nsPerOp += b.callback(nGoroutines)
+					nsPerOp += testing.Benchmark(b.callback).NsPerOp()
 					fmt.Printf("\tns/op: %v", nsPerOp/(i+1))
 				}
 				fmt.Println()
@@ -105,6 +110,7 @@ func runBenchmark(barr []benchmarks) {
 				file.WriteString(fmt.Sprintf(",%.2f", MOPS))
 			}
 			file.WriteString("\n")
+			runtime.GOMAXPROCS(oldGMP)
 		}
 
 		// Finished, so close the file.
@@ -128,6 +134,22 @@ func main() {
 		trials = trialType(3)
 	}
 
+	// oldGMP := runtime.GOMAXPROCS(0)
+	// for _, newGMP := range ([]int64)(f) {
+	// 	runtime.GOMAXPROCS(int(newGMP))
+	// 	var t time.Duration
+	// 	var n int64
+	// 	for i := int64(0); i < int64(trials); i++ {
+	// 		br := testing.Benchmark(intset_testing.ConcurrentIntset)
+	// 		t += br.T
+	// 		n += int64(br.N)
+	// 		nsPerOp := t.Nanoseconds() / int64(n)
+	// 		fmt.Printf("\rGoroutines: %v, Trial: %v/%v, ns/op: %v", newGMP, i+1, int64(trials), nsPerOp)
+	// 	}
+	// 	fmt.Println()
+	// }
+	// runtime.GOMAXPROCS(oldGMP)
+
 	var info []benchmarkInfo
 	for _, goroutines := range f {
 		info = append(info, benchmarkInfo{goroutines, int64(trials)})
@@ -138,23 +160,23 @@ func main() {
 		benchmarks{
 			[]benchmark{
 				benchmark{
-					intset_testing.ConcurrentIntset,
+					intset_testing.BenchmarkConcurrentIntset,
 					"Concurrent Map",
 				},
 				benchmark{
-					intset_testing.StreamrailConcurrentIntset,
+					intset_testing.BenchmarkStreamrailConcurrentIntset,
 					"Streamrail Concurrent Map",
 				},
 				benchmark{
-					intset_testing.GotomicConcurrentIntset,
+					intset_testing.BenchmarkGotomicConcurrentIntset,
 					"Gotomic Concurrent Map",
 				},
 				benchmark{
-					intset_testing.SynchronizedIntset,
+					intset_testing.BenchmarkSynchronizedIntset,
 					"Synchronized Map (Mutex)",
 				},
 				benchmark{
-					intset_testing.ReaderWriterIntset,
+					intset_testing.BenchmarkReaderWriterIntset,
 					"ReaderWriter Map (RWMutex)",
 				},
 			},
@@ -166,19 +188,19 @@ func main() {
 		benchmarks{
 			[]benchmark{
 				benchmark{
-					iterator_testing.ConcurrentIterator_RO,
+					iterator_testing.BenchmarkConcurrentIterator_RO,
 					"Concurrent Map",
 				},
 				benchmark{
-					iterator_testing.StreamrailConcurrentIterator_RO,
+					iterator_testing.BenchmarkStreamrailConcurrentIterator_RO,
 					"Streamrail Concurrent Map",
 				},
 				benchmark{
-					iterator_testing.GotomicConcurrentIterator_RO,
+					iterator_testing.BenchmarkGotomicConcurrentIterator_RO,
 					"Gotomic Concurrent Map",
 				},
 				benchmark{
-					iterator_testing.DefaultIterator_RO,
+					iterator_testing.BenchmarkDefaultIterator_RO,
 					"Default Map (No Mutex)",
 				},
 			},
@@ -186,47 +208,47 @@ func main() {
 			"iteratorRO",
 			info,
 		},
-		// // Read-Write Iterator
-		// benchmarks{
-		// 	[]benchmark{
-		// 		benchmark{
-		// 			iterator_testing.ConcurrentIterator_RW,
-		// 			"Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			iterator_testing.SynchronizedIterator_RW,
-		// 			"Synchronized Map (Mutex)",
-		// 		},
-		// 		benchmark{
-		// 			iterator_testing.ReaderWriterIterator_RW,
-		// 			"ReaderWriter Map (RWMutex)",
-		// 		},
-		// 	},
-		// 	"iteratorRW.csv",
-		// 	"iteratorRW",
-		// 	info,
-		// },
+		// Read-Write Iterator
+		benchmarks{
+			[]benchmark{
+				benchmark{
+					iterator_testing.BenchmarkConcurrentIterator_RW,
+					"Concurrent Map",
+				},
+				benchmark{
+					iterator_testing.BenchmarkSynchronizedIterator_RW,
+					"Synchronized Map (Mutex)",
+				},
+				benchmark{
+					iterator_testing.BenchmarkReaderWriterIterator_RW,
+					"ReaderWriter Map (RWMutex)",
+				},
+			},
+			"iteratorRW.csv",
+			"iteratorRW",
+			info,
+		},
 		// Combined
 		benchmarks{
 			[]benchmark{
 				benchmark{
-					combined_testing.ConcurrentCombined,
+					combined_testing.BenchmarkConcurrentCombined,
 					"Concurrent Map",
 				},
 				benchmark{
-					combined_testing.StreamrailConcurrentCombined,
+					combined_testing.BenchmarkStreamrailConcurrentCombined,
 					"Streamrail Concurrent Map",
 				},
 				benchmark{
-					combined_testing.GotomicConcurrentCombined,
+					combined_testing.BenchmarkGotomicConcurrentCombined,
 					"Gotomic Concurrent Map",
 				},
 				benchmark{
-					combined_testing.SynchronizedCombined,
+					combined_testing.BenchmarkSynchronizedCombined,
 					"Synchronized Map (Mutex)",
 				},
 				benchmark{
-					combined_testing.ReaderWriterCombined,
+					combined_testing.BenchmarkReaderWriterCombined,
 					"ReaderWriter Map (RWMutex)",
 				},
 			},
@@ -234,26 +256,26 @@ func main() {
 			"combined",
 			info,
 		},
-		// // Combined - Skim
-		// benchmarks{
-		// 	[]benchmark{
-		// 		benchmark{
-		// 			combined_testing.ConcurrentCombinedSkim,
-		// 			"Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			combined_testing.SynchronizedCombinedSkim,
-		// 			"Synchronized Map (Mutex)",
-		// 		},
-		// 		benchmark{
-		// 			combined_testing.ReaderWriterCombinedSkim,
-		// 			"ReaderWriter Map (RWMutex)",
-		// 		},
-		// 	},
-		// 	"combinedSkim.csv",
-		// 	"combinedSkim",
-		// 	info,
-		// },
+		// Combined - Skim
+		benchmarks{
+			[]benchmark{
+				benchmark{
+					combined_testing.BenchmarkConcurrentCombinedSkim,
+					"Concurrent Map",
+				},
+				benchmark{
+					combined_testing.BenchmarkSynchronizedCombinedSkim,
+					"Synchronized Map (Mutex)",
+				},
+				benchmark{
+					combined_testing.BenchmarkReaderWriterCombinedSkim,
+					"ReaderWriter Map (RWMutex)",
+				},
+			},
+			"combinedSkim.csv",
+			"combinedSkim",
+			info,
+		},
 	}
 
 	runBenchmark(benchmarks)
