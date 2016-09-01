@@ -80,7 +80,7 @@ var COMBINED_FAIR_RATIO float64 = .25
 var COMBINED_SKIM_NON_ITERATION_RATIO float64 = .325
 
 // COMBINED_KEY_RANGE is the range of generated 64-bit signed integer keys using during the combined test
-var COMBINED_KEY_RANGE int64 = 10000
+var COMBINED_KEY_RANGE int64 = 255
 
 // SWAP_FREQUENCY is used to during the sync.Interlocked swap test to determine how often elements are swapped.
 // By default, this value is set to .33
