@@ -21,10 +21,11 @@ func MillionOpsPerSecond(nGoroutines int, callback func(nGoroutines int) int64) 
 
 // All benchmarks and the filename all benchmarks will be written to.
 type benchmarks struct {
-	benchmarks []benchmark
-	fileName   string
-	csvHeader  string
-	info       []benchmarkInfo
+	benchmarks  []benchmark
+	fileName    string
+	csvHeader   string
+	isIteration bool
+	info        []benchmarkInfo
 }
 
 type benchmark struct {
@@ -105,9 +106,15 @@ func runBenchmark(barr []benchmarks) {
 				// Average then convert to Million Operations per Second
 				nsPerOp /= info.trials
 				OPS := float64(1000000000) / float64(nsPerOp)
-				MOPS := OPS / float64(1000000)
 
-				file.WriteString(fmt.Sprintf(",%.2f", MOPS))
+				if bm.isIteration {
+					KOPS := OPS / float64(1000)
+					file.WriteString(fmt.Sprintf(",%.2f", KOPS))
+				} else {
+					MOPS := OPS / float64(1000000)
+					file.WriteString(fmt.Sprintf(",%.2f", MOPS))
+				}
+
 			}
 			file.WriteString("\n")
 			runtime.GOMAXPROCS(oldGMP)
@@ -182,6 +189,7 @@ func main() {
 			},
 			"intset.csv",
 			"intset",
+			false,
 			info,
 		},
 		// Read-Only Iterator
@@ -206,6 +214,7 @@ func main() {
 			},
 			"iteratorRO.csv",
 			"iteratorRO",
+			true,
 			info,
 		},
 		// Read-Write Iterator
@@ -226,6 +235,7 @@ func main() {
 			},
 			"iteratorRW.csv",
 			"iteratorRW",
+			true,
 			info,
 		},
 		// Combined
@@ -254,6 +264,7 @@ func main() {
 			},
 			"combined.csv",
 			"combined",
+			true,
 			info,
 		},
 		// Combined - Skim
@@ -274,6 +285,7 @@ func main() {
 			},
 			"combinedSkim.csv",
 			"combinedSkim",
+			true,
 			info,
 		},
 	}
