@@ -137,7 +137,7 @@ const (
 	HASH_SHIFT = sys.PtrSize*8 - 8
 
 	// The minimum number of CPU cycles we spin during the tight-spin waiting for the lock holder to change.
-	MIN_SPIN_CYCLES = 10
+	MIN_SPIN_CYCLES = 40
 	// The number of CPU cycles we go up by on each iteration
 	SPIN_INCREMENT = 10
 
@@ -486,7 +486,7 @@ func cmapiternext(it *hiter) {
 	var data *bucketData
 	var hdr *bucketHdr
 	var key, value unsafe.Pointer
-	var backoff, spins int64
+	var spins int64
 	var idx, offset, startIdx uint32
 
 	citer := (*concurrentIterator)(it.citerHdr)
@@ -631,7 +631,6 @@ next:
 	for {
 		// Reset backoff variables
 		spins = 0
-		backoff = DEFAULT_BACKOFF
 
 		lock := atomic.Loaduintptr(&hdr.lock)
 
@@ -693,7 +692,6 @@ next:
 pollSkippedBuckets:
 	// Reset backoff variables
 	spins = 0
-	backoff = DEFAULT_BACKOFF
 
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
@@ -765,19 +763,13 @@ pollSkippedBuckets:
 			break
 		}
 
-		// Handle polliing over buckets with some backoff.
-		if spins < GOSCHED_AFTER_SPINS {
-			procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-		} else if spins < SLEEP_AFTER_SPINS {
+		backoffMult := spins
+		if spins > GOSCHED_AFTER_SPINS {
+			backoffMult = GOSCHED_AFTER_SPINS
 			Gosched()
-		} else {
-			timeSleep(backoff)
-
-			// ≈1ms
-			if backoff < MAX_BACKOFF {
-				backoff *= 2
-			}
 		}
+		procyield(uint32(MIN_SPIN_CYCLES + (backoffMult * SPIN_INCREMENT)))
+
 		spins++
 	}
 
@@ -1003,25 +995,27 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins < GOSCHED_AFTER_SPINS {
-				procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-			} else if spins < SLEEP_AFTER_SPINS {
-				Gosched()
-			} else {
-				timeSleep(backoff)
-
-				// ≈1ms
-				if backoff < MAX_BACKOFF {
-					backoff *= 2
+			done := false
+			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
+				// We test the lock on each iteration
+				lock = atomic.Loaduintptr(&hdr.lock)
+				// If the previous lock-holder released the lock, attempt to acquire again.
+				if lock != holder {
+					if spins > 100000 {
+						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+					}
+					done = true
+					break
 				}
-			}
-			spins++
 
-			if spins >= 1000 {
-				println("...g # ", g.goid, ": Spins:", spins)
+				procyield(uint32(MIN_SPIN_CYCLES))
 			}
+			if done {
+				break
+			}
+			Gosched()
 
-			if spins > 10000 {
+			if spins > 1000000 {
 				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
 				println("holder: ", holder)
 				println("lock: ", lock)
@@ -1040,16 +1034,6 @@ next:
 				println("}")
 
 				throw("Deadlock Detected!")
-			}
-
-			// We test the lock on each iteration
-			lock = atomic.Loaduintptr(&hdr.lock)
-			// If the previous lock-holder released the lock, attempt to acquire again.
-			if lock != holder {
-				if spins > 20 {
-					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-				}
-				break
 			}
 		}
 	}
@@ -1280,26 +1264,28 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins < GOSCHED_AFTER_SPINS {
-				procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-			} else if spins < SLEEP_AFTER_SPINS {
-				Gosched()
-			} else {
-				timeSleep(backoff)
-
-				// ≈1ms
-				if backoff < MAX_BACKOFF {
-					backoff *= 2
+			done := false
+			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
+				// We test the lock on each iteration
+				lock = atomic.Loaduintptr(&hdr.lock)
+				// If the previous lock-holder released the lock, attempt to acquire again.
+				if lock != holder {
+					if spins > 100000 {
+						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+					}
+					done = true
+					break
 				}
-			}
-			spins++
 
-			if spins >= 1000 {
-				println("...g # ", g.goid, ": Spins:", spins)
+				procyield(uint32(MIN_SPIN_CYCLES))
 			}
+			if done {
+				break
+			}
+			Gosched()
 
-			if spins > 10000 {
-				println("...g # ", g.goid, ": Function: cmapaccess, Crash Dump: {")
+			if spins > 1000000 {
+				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
 				println("holder: ", holder)
 				println("lock: ", lock)
 				println("gptr: ", gptr)
@@ -1317,16 +1303,6 @@ next:
 				println("}")
 
 				throw("Deadlock Detected!")
-			}
-
-			// We test the lock on each iteration
-			lock = atomic.Loaduintptr(&hdr.lock)
-			// If the previous lock-holder released the lock, attempt to acquire again.
-			if lock != holder {
-				if spins > 20 {
-					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-				}
-				break
 			}
 		}
 	}
@@ -1536,26 +1512,28 @@ next:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins < GOSCHED_AFTER_SPINS {
-				procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-			} else if spins < SLEEP_AFTER_SPINS {
-				Gosched()
-			} else {
-				timeSleep(backoff)
-
-				// ≈1ms
-				if backoff < MAX_BACKOFF {
-					backoff *= 2
+			done := false
+			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
+				// We test the lock on each iteration
+				lock = atomic.Loaduintptr(&hdr.lock)
+				// If the previous lock-holder released the lock, attempt to acquire again.
+				if lock != holder {
+					if spins > 100000 {
+						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+					}
+					done = true
+					break
 				}
-			}
-			spins++
 
-			if spins >= 1000 {
-				println("...g # ", g.goid, ": Spins:", spins)
+				procyield(uint32(MIN_SPIN_CYCLES))
 			}
+			if done {
+				break
+			}
+			Gosched()
 
-			if spins > 10000 {
-				println("...g # ", g.goid, ": Function: cmapdelete, Crash Dump: {")
+			if spins > 1000000 {
+				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
 				println("holder: ", holder)
 				println("lock: ", lock)
 				println("gptr: ", gptr)
@@ -1573,16 +1551,6 @@ next:
 				println("}")
 
 				throw("Deadlock Detected!")
-			}
-
-			// We test the lock on each iteration
-			lock = atomic.Loaduintptr(&hdr.lock)
-			// If the previous lock-holder released the lock, attempt to acquire again.
-			if lock != holder {
-				if spins > 20 {
-					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-				}
-				break
 			}
 		}
 	}
@@ -1766,28 +1734,45 @@ test:
 
 		// Tight-spin until the current lock-holder releases lock
 		for {
-			if spins < GOSCHED_AFTER_SPINS {
-				procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-			} else if spins < SLEEP_AFTER_SPINS {
-				Gosched()
-			} else {
-				timeSleep(backoff)
-
-				// ≈1ms
-				if backoff < MAX_BACKOFF {
-					backoff *= 2
+			done := false
+			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
+				// We test the lock on each iteration
+				lock = atomic.Loaduintptr(&hdr.lock)
+				// If the previous lock-holder released the lock, attempt to acquire again.
+				if lock != holder {
+					if spins > 100000 {
+						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
+					}
+					done = true
+					break
 				}
+
+				procyield(uint32(MIN_SPIN_CYCLES))
 			}
-			spins++
-
-			// We test the lock on each iteration
-			lock = atomic.Loaduintptr(&hdr.lock)
-			// If the previous lock-holder released the lock, attempt to acquire again.
-			if lock != holder {
-				if spins > 20 {
-					println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-				}
+			if done {
 				break
+			}
+			Gosched()
+
+			if spins > 1000000 {
+				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
+				println("holder: ", holder)
+				println("lock: ", lock)
+				println("gptr: ", gptr)
+				println("hdr: {")
+				println("\taddress: ", hdr)
+				println("\tcount: ", hdr.count)
+				println("\tlock: ", hdr.lock)
+				println("\tparent: {")
+				println("\t\taddress: ", hdr.parent)
+				println("\t\tlock: ", hdr.parent.lock)
+				println("\t\tcount: ", hdr.parent.count)
+				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
+				println("\t}")
+				println("\tparentIdx: ", hdr.parentIdx)
+				println("}")
+
+				throw("Deadlock Detected!")
 			}
 		}
 	}
