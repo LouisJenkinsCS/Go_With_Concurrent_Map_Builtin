@@ -159,7 +159,7 @@ const (
 	WRAPPED = uint32(1 << 31)
 
 	// During pre-expansion, this is the number of buckets per potential Goroutine accessing the map in parallel
-	BUCKET_PER_GOROUTINE = int64(2)
+	BUCKET_PER_GOROUTINE = int64(0)
 
 	// See hashmap.go, this obtains a properly aligned offset to the data
 	// Is used to obtain the array of keys and values at the end of the runtime representation of the bucketData type.
