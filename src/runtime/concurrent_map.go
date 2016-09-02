@@ -692,6 +692,7 @@ next:
 pollSkippedBuckets:
 	// Reset backoff variables
 	spins = 0
+	backoff := DEFAULT_BACKOFF
 
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
@@ -763,17 +764,19 @@ pollSkippedBuckets:
 			break
 		}
 
-		backoffMult := spins
-		if spins > 10 {
-			backoffMult = 10
-		}
-
-		if ((spins + 1) % 100) == 0 {
+		// Handle polliing over buckets with some backoff.
+		if spins < GOSCHED_AFTER_SPINS {
+			procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
+		} else if spins < SLEEP_AFTER_SPINS {
 			Gosched()
 		} else {
-			procyield(uint32(MIN_SPIN_CYCLES + (backoffMult * SPIN_INCREMENT)))
-		}
+			timeSleep(int64(backoff))
 
+			// ≈1ms
+			if backoff < MAX_BACKOFF {
+				backoff *= 2
+			}
+		}
 		spins++
 	}
 

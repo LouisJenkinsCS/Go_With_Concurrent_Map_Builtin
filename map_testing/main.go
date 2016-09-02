@@ -4,7 +4,6 @@ import (
 	"combined_testing"
 	"flag"
 	"fmt"
-	"intset_testing"
 	"iterator_testing"
 	"os"
 	"runtime"
@@ -163,35 +162,35 @@ func main() {
 	}
 
 	benchmarks := []benchmarks{
-		// Intset
-		benchmarks{
-			[]benchmark{
-				benchmark{
-					intset_testing.BenchmarkConcurrentIntset,
-					"Concurrent Map",
-				},
-				benchmark{
-					intset_testing.BenchmarkStreamrailConcurrentIntset,
-					"Streamrail Concurrent Map",
-				},
-				benchmark{
-					intset_testing.BenchmarkGotomicConcurrentIntset,
-					"Gotomic Concurrent Map",
-				},
-				benchmark{
-					intset_testing.BenchmarkSynchronizedIntset,
-					"Synchronized Map (Mutex)",
-				},
-				benchmark{
-					intset_testing.BenchmarkReaderWriterIntset,
-					"ReaderWriter Map (RWMutex)",
-				},
-			},
-			"intset.csv",
-			"intset",
-			false,
-			info,
-		},
+		// // Intset
+		// benchmarks{
+		// 	[]benchmark{
+		// 		benchmark{
+		// 			intset_testing.BenchmarkConcurrentIntset,
+		// 			"Concurrent Map",
+		// 		},
+		// 		benchmark{
+		// 			intset_testing.BenchmarkStreamrailConcurrentIntset,
+		// 			"Streamrail Concurrent Map",
+		// 		},
+		// 		benchmark{
+		// 			intset_testing.BenchmarkGotomicConcurrentIntset,
+		// 			"Gotomic Concurrent Map",
+		// 		},
+		// 		benchmark{
+		// 			intset_testing.BenchmarkSynchronizedIntset,
+		// 			"Synchronized Map (Mutex)",
+		// 		},
+		// 		benchmark{
+		// 			intset_testing.BenchmarkReaderWriterIntset,
+		// 			"ReaderWriter Map (RWMutex)",
+		// 		},
+		// 	},
+		// 	"intset.csv",
+		// 	"intset",
+		// 	false,
+		// 	info,
+		// },
 		// Read-Only Iterator
 		benchmarks{
 			[]benchmark{
@@ -199,45 +198,45 @@ func main() {
 					iterator_testing.BenchmarkConcurrentIterator_RO,
 					"Concurrent Map",
 				},
-				benchmark{
-					iterator_testing.BenchmarkStreamrailConcurrentIterator_RO,
-					"Streamrail Concurrent Map",
-				},
+				// benchmark{
+				// 	iterator_testing.BenchmarkStreamrailConcurrentIterator_RO,
+				// 	"Streamrail Concurrent Map",
+				// },
 				benchmark{
 					iterator_testing.BenchmarkGotomicConcurrentIterator_RO,
 					"Gotomic Concurrent Map",
 				},
-				benchmark{
-					iterator_testing.BenchmarkDefaultIterator_RO,
-					"Default Map (No Mutex)",
-				},
+				// benchmark{
+				// 	iterator_testing.BenchmarkDefaultIterator_RO,
+				// 	"Default Map (No Mutex)",
+				// },
 			},
 			"iteratorRO.csv",
 			"iteratorRO",
 			true,
 			info,
 		},
-		// Read-Write Iterator
-		benchmarks{
-			[]benchmark{
-				benchmark{
-					iterator_testing.BenchmarkConcurrentIterator_RW,
-					"Concurrent Map",
-				},
-				benchmark{
-					iterator_testing.BenchmarkSynchronizedIterator_RW,
-					"Synchronized Map (Mutex)",
-				},
-				benchmark{
-					iterator_testing.BenchmarkReaderWriterIterator_RW,
-					"ReaderWriter Map (RWMutex)",
-				},
-			},
-			"iteratorRW.csv",
-			"iteratorRW",
-			true,
-			info,
-		},
+		// // Read-Write Iterator
+		// benchmarks{
+		// 	[]benchmark{
+		// 		benchmark{
+		// 			iterator_testing.BenchmarkConcurrentIterator_RW,
+		// 			"Concurrent Map",
+		// 		},
+		// 		benchmark{
+		// 			iterator_testing.BenchmarkSynchronizedIterator_RW,
+		// 			"Synchronized Map (Mutex)",
+		// 		},
+		// 		benchmark{
+		// 			iterator_testing.BenchmarkReaderWriterIterator_RW,
+		// 			"ReaderWriter Map (RWMutex)",
+		// 		},
+		// 	},
+		// 	"iteratorRW.csv",
+		// 	"iteratorRW",
+		// 	true,
+		// 	info,
+		// },
 		// Combined
 		benchmarks{
 			[]benchmark{
@@ -245,49 +244,49 @@ func main() {
 					combined_testing.BenchmarkConcurrentCombined,
 					"Concurrent Map",
 				},
-				benchmark{
-					combined_testing.BenchmarkStreamrailConcurrentCombined,
-					"Streamrail Concurrent Map",
-				},
+				// benchmark{
+				// 	combined_testing.BenchmarkStreamrailConcurrentCombined,
+				// 	"Streamrail Concurrent Map",
+				// },
 				benchmark{
 					combined_testing.BenchmarkGotomicConcurrentCombined,
 					"Gotomic Concurrent Map",
 				},
-				benchmark{
-					combined_testing.BenchmarkSynchronizedCombined,
-					"Synchronized Map (Mutex)",
-				},
-				benchmark{
-					combined_testing.BenchmarkReaderWriterCombined,
-					"ReaderWriter Map (RWMutex)",
-				},
+				// benchmark{
+				// 	combined_testing.BenchmarkSynchronizedCombined,
+				// 	"Synchronized Map (Mutex)",
+				// },
+				// benchmark{
+				// 	combined_testing.BenchmarkReaderWriterCombined,
+				// 	"ReaderWriter Map (RWMutex)",
+				// },
 			},
 			"combined.csv",
 			"combined",
 			true,
 			info,
 		},
-		// Combined - Skim
-		benchmarks{
-			[]benchmark{
-				benchmark{
-					combined_testing.BenchmarkConcurrentCombinedSkim,
-					"Concurrent Map",
-				},
-				benchmark{
-					combined_testing.BenchmarkSynchronizedCombinedSkim,
-					"Synchronized Map (Mutex)",
-				},
-				benchmark{
-					combined_testing.BenchmarkReaderWriterCombinedSkim,
-					"ReaderWriter Map (RWMutex)",
-				},
-			},
-			"combinedSkim.csv",
-			"combinedSkim",
-			true,
-			info,
-		},
+		// // Combined - Skim
+		// benchmarks{
+		// 	[]benchmark{
+		// 		benchmark{
+		// 			combined_testing.BenchmarkConcurrentCombinedSkim,
+		// 			"Concurrent Map",
+		// 		},
+		// 		benchmark{
+		// 			combined_testing.BenchmarkSynchronizedCombinedSkim,
+		// 			"Synchronized Map (Mutex)",
+		// 		},
+		// 		benchmark{
+		// 			combined_testing.BenchmarkReaderWriterCombinedSkim,
+		// 			"ReaderWriter Map (RWMutex)",
+		// 		},
+		// 	},
+		// 	"combinedSkim.csv",
+		// 	"combinedSkim",
+		// 	true,
+		// 	info,
+		// },
 	}
 
 	runBenchmark(benchmarks)
