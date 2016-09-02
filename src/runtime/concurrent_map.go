@@ -764,11 +764,15 @@ pollSkippedBuckets:
 		}
 
 		backoffMult := spins
-		if spins > GOSCHED_AFTER_SPINS {
-			backoffMult = GOSCHED_AFTER_SPINS
-			Gosched()
+		if spins > 10 {
+			backoffMult = 10
 		}
-		procyield(uint32(MIN_SPIN_CYCLES + (backoffMult * SPIN_INCREMENT)))
+
+		if ((spins + 1) % 100) == 0 {
+			Gosched()
+		} else {
+			procyield(uint32(MIN_SPIN_CYCLES + (backoffMult * SPIN_INCREMENT)))
+		}
 
 		spins++
 	}
