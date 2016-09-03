@@ -184,8 +184,9 @@ var DUMMY_RETVAL [MAXZERO]byte
 		the lock, further reducing contention.
 */
 type bucketHdr struct {
-	// INVALID | ARRAY | UNLOCKED | LOCKED
-	lock uintptr
+	lock mutex
+	// ARRAY | INVALID
+	state uint32
 	// Number of elements in this bucketHdr
 	count uint32
 	// Index we are on inside of our parent.
@@ -202,7 +203,8 @@ type bucketHdr struct {
 */
 type bucketArray struct {
 	// Fields embedded from bucketHdr; for complexity reasons, we can't actually embed the type in the runtime (because we would have to also do so in compiler)
-	lock      uintptr
+	lock      mutex
+	state     uint32
 	count     uint32
 	parentIdx uint32
 	parent    *bucketArray
@@ -220,7 +222,8 @@ type bucketArray struct {
 */
 type bucketData struct {
 	// Fields embedded from bucketHdr; for complexity reasons, we can't actually embed the type in the runtime (because we would have to also do so in compiler)
-	lock      uintptr
+	lock      mutex
+	state     uint32
 	count     uint32
 	parentIdx uint32
 	parent    *bucketArray
@@ -405,7 +408,7 @@ next:
 		goto next
 	}
 
-	if hdr.lock == ARRAY {
+	if hdr.state == ARRAY {
 		nArr++
 		arrAtDepth++
 		depthMap[depth] = (arrAtDepth << 32) | dataAtDepth
@@ -487,13 +490,11 @@ func cmapiternext(it *hiter) {
 	var hdr *bucketHdr
 	var key, value unsafe.Pointer
 	var spins int64
-	var idx, offset, startIdx uint32
+	var idx, offset, startIdx, state uint32
 
 	citer := (*concurrentIterator)(it.citerHdr)
 	info := (*interlockedInfo)(citer.g.interlockedData[len(citer.g.interlockedData)-1])
 	t := it.t
-	g := citer.g
-	gptr := uintptr(unsafe.Pointer(g))
 
 	// Find the next key-value element. It assumes that if citer.offset < MAX_SLOTS, that citer.info.hdr actually holds a valid header.
 	// This is jumped to during iteration when we acquire a valid bucketHdr containing any elements and need to iterate over that bucket.
@@ -566,15 +567,14 @@ findKeyValue:
 
 	// Check for the case when we deleted all elements in this bucket, and if we did, invalidate and delete it
 	if data.count == 0 {
-		// Invalidate and release the bucket (as it is being deleted)
+		// Invalidate and release the bucket (as it is being deleted).
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&data.parent.buckets[data.parentIdx])), nil)
-		atomic.Storeuintptr(&data.lock, INVALID)
-
-		// Also decrement number of buckets
+		atomic.Store(&hdr.state, INVALID)
 		atomic.Xadd(&data.parent.count, -1)
+		unlock(&hdr.lock)
 	} else {
 		// Otherwise, just release the lock on the bucket
-		atomic.Storeuintptr(&data.lock, UNLOCKED)
+		unlock(&hdr.lock)
 	}
 
 	// Zero all fields to help GC
@@ -623,70 +623,54 @@ next:
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
 	citer.idx++
 
+test:
 	// Read ahead of time if we should skip.
 	if hdr == nil || atomic.Load(&hdr.count) == 0 {
 		goto next
 	}
 
-	for {
-		// Reset backoff variables
-		spins = 0
+	state = atomic.Load(&hdr.state)
 
-		lock := atomic.Loaduintptr(&hdr.lock)
+	// If it's recursive, recurse and find new bucket
+	if state == ARRAY {
+		citer.arr = (*bucketArray)(unsafe.Pointer(hdr))
 
-		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
-		if lock == INVALID {
-			// Reload hdr, since what it was pointed to has changed; idx - 1 because we incremented above
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
-			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all).
-			// hdr.count == 0 iff another Goroutine has created a new bucketData during a 'mapassign' but has not yet finished it's assignment.
-			// In this case, there's still nothing here for us.
-			if hdr == nil || atomic.Load(&hdr.count) == 0 {
-				goto next
-			}
-			// Loop again.
-			continue
-		}
+		size := len(citer.arr.buckets)
+		randStart := uint32(primes[fastrand1()%uint32(len(primes))] % size)
+		citer.startIdx = append(citer.startIdx, randStart)
+		citer.idx = uint32((randStart + 1) % uint32(size))
 
-		// If it's recursive, recurse and find new bucket
-		if lock == ARRAY {
-			citer.arr = (*bucketArray)(unsafe.Pointer(hdr))
-
-			size := len(citer.arr.buckets)
-			randStart := uint32(primes[fastrand1()%uint32(len(primes))] % size)
-			citer.startIdx = append(citer.startIdx, randStart)
-			citer.idx = uint32((randStart + 1) % uint32(size))
-
-			citer.depth++
-
-			goto next
-		}
-
-		// Acquire lock on bucket
-		if lock == UNLOCKED {
-			// Attempt to acquire
-			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				break
-			}
-			continue
-		}
-
-		// If we already own the lock, then we somehow forget to release the lock and the map is in a bad state.
-		if lock == gptr {
-			throw("Unexpected: Discovered already-owned lock while iterating...")
-			break
-		}
-
-		// During iteration, we do not backoff to reduce the effects of lock convoying.
-		// Instead we skip this bucket and process it later.
-		citer.skippedBuckets = append(citer.skippedBuckets, citer.arr.buckets[idx])
+		citer.depth++
 		goto next
 	}
 
-	info.hdr = hdr
+	// Fast-Path: If we can quickly acquire a lock on a bucket, do so.
+	if atomic.Loaduintptr(&hdr.lock.key) == 0 {
+		// We need to increment the count of locks held, even if we do not have the lock yet (to prevent
+		// any preemption and/or garbage collection)
+		g := getg()
+		g.m.locks++
+		if atomic.Casuintptr(&hdr.lock.key, 0, 1) {
+			// In the case that this bucket has been abandoned, we can't just go ahead and process it.
+			// Hence in the case it is in an INVALID state, we must reload and test it again.
+			if atomic.Load(&hdr.state) == INVALID {
+				unlock(&hdr.lock)
+				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
+				goto test
+			}
 
-	// We have the data we are looking for.
-	goto findKeyValue
+			// Otherwise, we're free to serve this.
+			info.hdr = hdr
+			goto findKeyValue
+		}
+		g.m.locks--
+	}
+
+	// At this point, the bucket's lock is being contended, and so we skip this bucket to
+	// be processed later.
+	// TODO: Add ourselves to wait list.
+	citer.skippedBuckets = append(citer.skippedBuckets, citer.arr.buckets[idx])
+	goto next
 
 	// Called to poll thorugh any skipped buckets
 pollSkippedBuckets:
@@ -705,24 +689,11 @@ pollSkippedBuckets:
 				continue
 			}
 
-			lock := atomic.Loaduintptr(&hdr.lock)
-
-			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
-			if lock == INVALID {
-				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
-				doneProcessing = false
-				continue
-			}
-
-			// There is no data here (yet), dispose of it.
-			if atomic.Load(&hdr.count) == 0 {
-				citer.skippedBuckets[idx] = nil
-				continue
-			}
+			state = atomic.Load(&hdr.state)
 
 			// In the easier case wherein the hdr has ARRAY bit flagged, we can allow 'next' label to take care of it.
 			// Randomize start iteration as well.
-			if lock == ARRAY {
+			if state == ARRAY {
 				citer.arr = (*bucketArray)(unsafe.Pointer(hdr))
 
 				// Randomize start position
@@ -737,23 +708,41 @@ pollSkippedBuckets:
 				goto next
 			}
 
-			// In this case, we know that lock is not invalid (yet) nor is it ARRAY (yet), so we do a simple test for if it is UNLOCKED.
-			// Once again, this is polling, so we don't do a tight spin or anything else either.
-			if lock == UNLOCKED {
-				// Test-And-Set
-				if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-					info.hdr = hdr
-
-					// We are processing this hdr, so nil it out
-					citer.skippedBuckets[idx] = nil
-
-					// Begin processing the interlocked bucket
-					goto findKeyValue
-				}
+			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
+			if state == INVALID {
+				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
+				doneProcessing = false
+				continue
 			}
 
-			if lock == gptr {
-				throw("Unexpected: lock == gptr, iterated over a skipped bucket we currently own!!!")
+			// There is no data here (yet), dispose of it.
+			if atomic.Load(&hdr.count) == 0 {
+				citer.skippedBuckets[idx] = nil
+				continue
+			}
+
+			// Fast-Path: If we can quickly acquire a lock on a bucket, do so.
+			if atomic.Loaduintptr(&hdr.lock.key) == 0 {
+				// We need to increment the count of locks held, even if we do not have the lock yet (to prevent
+				// any preemption and/or garbage collection)
+				g := getg()
+				g.m.locks++
+				if atomic.Casuintptr(&hdr.lock.key, 0, 1) {
+					// In the case that this bucket has been abandoned, we can't just go ahead and process it.
+					// Hence in the case it is in an INVALID state, we must reload and test it again.
+					if atomic.Load(&hdr.state) == INVALID {
+						unlock(&hdr.lock)
+						citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
+						doneProcessing = false
+						continue
+					}
+
+					// Begin processing the interlocked bucket
+					info.hdr = hdr
+					citer.skippedBuckets[idx] = nil
+					goto findKeyValue
+				}
+				g.m.locks--
 			}
 
 			// At this point, this bucket cannot be processed yet
@@ -765,6 +754,7 @@ pollSkippedBuckets:
 		}
 
 		// Handle polliing over buckets with some backoff.
+		// TODO: Use wait-list
 		if spins < GOSCHED_AFTER_SPINS {
 			procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
 		} else if spins < SLEEP_AFTER_SPINS {
@@ -783,7 +773,6 @@ pollSkippedBuckets:
 	// If we make it this far, we've processed everything.
 	it.key = nil
 	it.value = nil
-
 	interlocked_release(it.h)
 }
 
@@ -821,7 +810,7 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrenc
 	cmap := (*concurrentMap)(newobject(t.concurrentmap))
 	cmap.root.buckets = make([]*bucketHdr, DEFAULT_BUCKETS)
 	cmap.root.seed = fastrand1()
-	cmap.root.lock = ARRAY
+	cmap.root.state = ARRAY
 
 	// We need enough buckets to hold all elements
 	maxHint := hint / MAX_SLOTS
@@ -852,7 +841,7 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrenc
 		// Fill out nesting level 1
 		for i := uint32(0); i < DEFAULT_BUCKETS; i++ {
 			arrL1 := (*bucketArray)(newobject(t.bucketarray))
-			arrL1.lock = ARRAY
+			arrL1.state = ARRAY
 			arrL1.seed = fastrand1()
 			arrL1.buckets = make([]*bucketHdr, DEFAULT_BUCKETS*2)
 			arrL1.parent = &cmap.root
@@ -864,7 +853,7 @@ func makecmap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer, concurrenc
 				// Fill out nesting level 2
 				for j := uint32(0); j < DEFAULT_BUCKETS*2; j++ {
 					arrL2 := (*bucketArray)(newobject(t.bucketarray))
-					arrL2.lock = ARRAY
+					arrL2.state = ARRAY
 					arrL2.seed = fastrand1()
 					arrL2.buckets = make([]*bucketHdr, DEFAULT_BUCKETS*4)
 					arrL2.parent = arrL1
@@ -901,11 +890,8 @@ func cmapassign1(t *maptype, h *hmap, key unsafe.Pointer, val unsafe.Pointer) {
 
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
-	var hash, idx, spins uintptr
-	var backoff int64
+	var hash, idx uintptr
 	var hdr *bucketHdr
-	gptr := uintptr(unsafe.Pointer(g))
-	// println("Root length:", len(arr.buckets))
 
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
 next:
@@ -913,149 +899,60 @@ next:
 	hash = t.key.alg.hash(key, uintptr(arr.seed))
 	idx = hash % uintptr(len(arr.buckets))
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-	setByUs := false
 
+	// Tests current header...
+	// Jumped to when we have an INVALID bucket, but we do not need to rehash.
+test:
 	// If hdr is nil, then no bucketData has been created yet. Do a wait-free creation of bucketData;
 	for hdr == nil {
 		// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
 		newHdr := (*bucketHdr)(newobject(t.bucketdata))
 		// Since we're setting it, may as well attempt to acquire lock and fill out fields
-		newHdr.lock = gptr
+		lock(&newHdr.lock)
 		newHdr.parent = arr
 		newHdr.parentIdx = uint32(idx)
 		// If we fail, then some other Goroutine has already placed theirs.
 		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 			// If we succeed, then we own this bucket and need to keep track of it
 			g.releaseBucket = unsafe.Pointer(newHdr)
-			// Also increment count of buckets
-			atomic.Xadd(&arr.count, 1)
-			setByUs = true
+
+			(*bucketData)(unsafe.Pointer(newHdr)).assign(t, 0, hash, key, val)
+			atomic.Store(&newHdr.count, 1)
+			atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
+			return
+		} else {
+			unlock(&newHdr.lock)
 		}
 		// Reload hdr
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 	}
 
-	// Attempt to acquire lock
-	for {
-		// If we set the lock, we skip the locking part all together
-		if setByUs {
-			break
-		}
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
+	state := atomic.Load(&hdr.state)
 
-		lock := atomic.Loaduintptr(&hdr.lock)
-
-		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
-		if lock == INVALID {
-			// Reload hdr, since what it was pointed to has changed
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			// If the hdr was deleted, then attempt to create a new one and try again
-			for hdr == nil {
-				// Note that bucketData has the same first 5 fields as bucketHdr, and can be safely casted
-				newHdr := (*bucketHdr)(newobject(t.bucketdata))
-				// Since we're setting it, may as well attempt to acquire lock and fill out fields
-				newHdr.lock = gptr
-				newHdr.parent = arr
-				newHdr.parentIdx = uint32(idx)
-				// If we fail, then some other Goroutine has already placed theirs.
-				if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
-					// If we succeed, then we own this bucket and need to keep track of it
-					g.releaseBucket = unsafe.Pointer(newHdr)
-					// Also increment count of buckets
-					atomic.Xadd(&arr.count, 1)
-					setByUs = true
-				}
-				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			}
-			// Loop again.
-			continue
-		}
-
-		// If it's recursive, try again on new bucket
-		if lock == ARRAY {
-			// println("Old Array Length:", len(arr.buckets))
-			arr = (*bucketArray)(unsafe.Pointer(hdr))
-			// println("New Array Length:", len(arr.buckets))
-			goto next
-		}
-
-		// If we hold the lock, something went wrong
-		if lock == gptr {
-			throw("Reacquired lock on bucket we currently own: Failed invariant!")
-		}
-
-		// If the lock is uncontested
-		if lock == UNLOCKED {
-			// Attempt to acquire
-			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				g.releaseBucket = unsafe.Pointer(hdr)
-				// println("...g # ", g.goid, ": Acquired lock")
-				break
-			}
-			continue
-		}
-
-		// Keep track of the current lock-holder
-		holder := lock & LOCKED_MASK
-
-		// Tight-spin until the current lock-holder releases lock
-		for {
-			done := false
-			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
-				// We test the lock on each iteration
-				lock = atomic.Loaduintptr(&hdr.lock)
-				// If the previous lock-holder released the lock, attempt to acquire again.
-				if lock != holder {
-					if spins > 100000 {
-						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-					}
-					done = true
-					break
-				}
-
-				procyield(uint32(MIN_SPIN_CYCLES))
-			}
-			if done {
-				break
-			}
-			Gosched()
-
-			if spins > 1000000 {
-				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
-				println("holder: ", holder)
-				println("lock: ", lock)
-				println("gptr: ", gptr)
-				println("hdr: {")
-				println("\taddress: ", hdr)
-				println("\tcount: ", hdr.count)
-				println("\tlock: ", hdr.lock)
-				println("\tparent: {")
-				println("\t\taddress: ", hdr.parent)
-				println("\t\tlock: ", hdr.parent.lock)
-				println("\t\tcount: ", hdr.parent.count)
-				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
-				println("\t}")
-				println("\tparentIdx: ", hdr.parentIdx)
-				println("}")
-
-				throw("Deadlock Detected!")
-			}
-		}
+	// If it's recursive, try again on new bucket
+	if state == ARRAY {
+		// println("Old Array Length:", len(arr.buckets))
+		arr = (*bucketArray)(unsafe.Pointer(hdr))
+		// println("New Array Length:", len(arr.buckets))
+		goto next
 	}
+
+	// Contest lock
+	lock(&hdr.lock)
+
+	// If the state of the bucket is INVALID, then either it's been deleted
+	// or been converted into a bucketArray; Reload and test it again.
+	if state == INVALID {
+		unlock(&hdr.lock)
+		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+		goto test
+	}
+
+	g.releaseBucket = unsafe.Pointer(hdr)
 
 	data := (*bucketData)(unsafe.Pointer(hdr))
 	count := atomic.Load(&hdr.count)
 	firstEmpty := -1
-
-	// In the special case that hdr.count == 0, then the bucketData is empty and we should just add the data immediately.
-	if count == 0 {
-		data.assign(t, 0, hash, key, val)
-		atomic.Store(&hdr.count, 1)
-		atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
-		return
-	}
 
 	// Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
 	for i, cnt := uint32(0), count; i < MAX_SLOTS && cnt > 0; i++ {
@@ -1094,7 +991,7 @@ next:
 		// println("len(arr.buckets) = ", len(arr.buckets))
 		newArr := (*bucketArray)(newobject(t.bucketarray))
 		// println("len(arr.buckets) = ", len(arr.buckets))
-		newArr.lock = ARRAY
+		newArr.state = ARRAY
 		// println("sizeof bucketHdr =", unsafe.Sizeof(bucketHdr{}), ";sizeof bucketData =", unsafe.Sizeof(bucketData{}), ";sizeof bucketArray =", unsafe.Sizeof(bucketArray{}))
 		// println("compiler_sizeof bucketHdr =", t.buckethdr.size, ";compiler_sizeof bucketData =", t.bucketdata.size, ";compiler_sizeof bucketArray =", t.bucketarray.size)
 		// println("arr - newArr =", uintptr(unsafe.Pointer(arr))-uintptr(unsafe.Pointer(newArr)))
@@ -1148,7 +1045,8 @@ next:
 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
 		// println("len: ", len(arr.buckets), "parentIdx: ", data.parentIdx, ", idx: ", idx)
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
-		atomic.Storeuintptr(&hdr.lock, INVALID)
+		atomic.Store(&hdr.state, INVALID)
+		unlock(&hdr.lock)
 
 		// Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for our current key-value.
 		// In this case try again, to reduce contention and increase concurrency over the lock
@@ -1180,11 +1078,8 @@ func maprelease() {
 	if g.releaseBucket != nil {
 		// println("g #", g.goid, ": released lock")
 		hdr := (*bucketHdr)(g.releaseBucket)
-
-		atomic.Storeuintptr(&hdr.lock, UNLOCKED)
-
+		unlock(&hdr.lock)
 		g.releaseBucket = nil
-
 	}
 }
 
@@ -1205,10 +1100,8 @@ func cmapaccess(t *maptype, h *hmap, key unsafe.Pointer, equal func(k1, k2 unsaf
 
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
-	var hash, idx, spins uintptr
-	var backoff int64
+	var hash, idx uintptr
 	var hdr *bucketHdr
-	gptr := uintptr(unsafe.Pointer(g))
 
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
 next:
@@ -1217,103 +1110,33 @@ next:
 	idx = hash % uintptr(len(arr.buckets))
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 
+	// Tests the header
+test:
 	// Save time by looking ahead of time (testing) if the header or if the bucket is empty
 	if hdr == nil || atomic.Load(&hdr.count) == 0 {
 		return unsafe.Pointer(&DUMMY_RETVAL[0]), false
 	}
 
-	// Attempt to acquire lock
-	for {
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
+	state := atomic.Load(&hdr.state)
 
-		// Testing lock
-		lock := atomic.Loaduintptr(&hdr.lock)
-
-		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
-		if lock == INVALID {
-			// Reload hdr, since what it was pointed to has changed
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all)
-			// hdr.count == 0 if another Goroutine has created a new bucketData after the old became INVALID. In this
-			// case, there's still nothing here for us.
-			if hdr == nil || atomic.Load(&hdr.count) == 0 {
-				return unsafe.Pointer(&DUMMY_RETVAL[0]), false
-			}
-			// Loop again.
-			continue
-		}
-
-		// If it's recursive, try again on new bucket
-		if lock == ARRAY {
-			arr = (*bucketArray)(unsafe.Pointer(hdr))
-			goto next
-		}
-
-		// If we hold the lock
-		if lock == gptr {
-			throw("Reacquired lock on bucket we currently own: Failed invariant!")
-		}
-
-		// If the lock is uncontested
-		if lock == UNLOCKED {
-			// Attempt to acquire
-			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				g.releaseBucket = unsafe.Pointer(hdr)
-				break
-			}
-			continue
-		}
-
-		// Keep track of the current lock-holder
-		holder := lock & LOCKED_MASK
-
-		// Tight-spin until the current lock-holder releases lock
-		for {
-			done := false
-			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
-				// We test the lock on each iteration
-				lock = atomic.Loaduintptr(&hdr.lock)
-				// If the previous lock-holder released the lock, attempt to acquire again.
-				if lock != holder {
-					if spins > 100000 {
-						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-					}
-					done = true
-					break
-				}
-
-				procyield(uint32(MIN_SPIN_CYCLES))
-			}
-			if done {
-				break
-			}
-			Gosched()
-
-			if spins > 1000000 {
-				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
-				println("holder: ", holder)
-				println("lock: ", lock)
-				println("gptr: ", gptr)
-				println("hdr: {")
-				println("\taddress: ", hdr)
-				println("\tcount: ", hdr.count)
-				println("\tlock: ", hdr.lock)
-				println("\tparent: {")
-				println("\t\taddress: ", hdr.parent)
-				println("\t\tlock: ", hdr.parent.lock)
-				println("\t\tcount: ", hdr.parent.count)
-				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
-				println("\t}")
-				println("\tparentIdx: ", hdr.parentIdx)
-				println("}")
-
-				throw("Deadlock Detected!")
-			}
-		}
+	// If it's recursive, try again on new bucket
+	if state == ARRAY {
+		arr = (*bucketArray)(unsafe.Pointer(hdr))
+		goto next
 	}
 
+	// Contest lock
+	lock(&hdr.lock)
+
+	// If the state of the bucket is INVALID, then either it's been deleted
+	// or been converted into a bucketArray; Reload and test it again.
+	if state == INVALID {
+		unlock(&hdr.lock)
+		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+		goto test
+	}
+
+	g.releaseBucket = unsafe.Pointer(hdr)
 	data := (*bucketData)(unsafe.Pointer(hdr))
 
 	// Search the bucketData for the data needed
@@ -1453,10 +1276,8 @@ func cmapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
-	var hash, idx, spins uintptr
-	var backoff int64
+	var hash, idx uintptr
 	var hdr *bucketHdr
-	gptr := uintptr(unsafe.Pointer(g))
 
 	// Finds the bucket associated with the key's hash; if it is recursive we jump back to here.
 next:
@@ -1465,103 +1286,35 @@ next:
 	idx = hash % uintptr(len(arr.buckets))
 	hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 
+	// Tests the header
+test:
 	// Save time by looking ahead of time (testing) if the header or if the bucket is empty
 	if hdr == nil || atomic.Load(&hdr.count) == 0 {
 		return
 	}
 
-	// Attempt to acquire lock
-	for {
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
+	state := atomic.Load(&hdr.state)
 
-		// Testing lock
-		lock := atomic.Loaduintptr(&hdr.lock)
-
-		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
-		if lock == INVALID {
-			// Reload hdr, since what it was pointed to has changed
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			// If the hdr was deleted, then the data we're trying to find isn't here anymore (if it was at all)
-			// hdr.count == 0 if another Goroutine has created a new bucketData after the old became INVALID. In this
-			// case, there's still nothing here for us.
-			if hdr == nil || atomic.Load(&hdr.count) == 0 {
-				return
-			}
-			// Loop again.
-			continue
-		}
-
-		// If it's recursive, try again on new bucket
-		if lock == ARRAY {
-			arr = (*bucketArray)(unsafe.Pointer(hdr))
-			goto next
-		}
-
-		// If we hold the lock
-		if lock == gptr {
-			break
-		}
-
-		// If the lock is uncontested
-		if lock == UNLOCKED {
-			// Attempt to acquire
-			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				g.releaseBucket = unsafe.Pointer(hdr)
-				break
-			}
-			continue
-		}
-
-		// Keep track of the current lock-holder
-		holder := lock & LOCKED_MASK
-
-		// Tight-spin until the current lock-holder releases lock
-		for {
-			done := false
-			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
-				// We test the lock on each iteration
-				lock = atomic.Loaduintptr(&hdr.lock)
-				// If the previous lock-holder released the lock, attempt to acquire again.
-				if lock != holder {
-					if spins > 100000 {
-						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-					}
-					done = true
-					break
-				}
-
-				procyield(uint32(MIN_SPIN_CYCLES))
-			}
-			if done {
-				break
-			}
-			Gosched()
-
-			if spins > 1000000 {
-				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
-				println("holder: ", holder)
-				println("lock: ", lock)
-				println("gptr: ", gptr)
-				println("hdr: {")
-				println("\taddress: ", hdr)
-				println("\tcount: ", hdr.count)
-				println("\tlock: ", hdr.lock)
-				println("\tparent: {")
-				println("\t\taddress: ", hdr.parent)
-				println("\t\tlock: ", hdr.parent.lock)
-				println("\t\tcount: ", hdr.parent.count)
-				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
-				println("\t}")
-				println("\tparentIdx: ", hdr.parentIdx)
-				println("}")
-
-				throw("Deadlock Detected!")
-			}
-		}
+	// If it's recursive, try again on new bucket
+	if state == ARRAY {
+		// println("Old Array Length:", len(arr.buckets))
+		arr = (*bucketArray)(unsafe.Pointer(hdr))
+		// println("New Array Length:", len(arr.buckets))
+		goto next
 	}
 
+	// Contest lock
+	lock(&hdr.lock)
+
+	// If the state of the bucket is INVALID, then either it's been deleted
+	// or been converted into a bucketArray; Reload and test it again.
+	if state == INVALID {
+		unlock(&hdr.lock)
+		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+		goto test
+	}
+
+	g.releaseBucket = unsafe.Pointer(hdr)
 	data := (*bucketData)(unsafe.Pointer(hdr))
 	count := atomic.Load(&hdr.count)
 
@@ -1606,7 +1359,8 @@ next:
 	if count == 0 {
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil)
 		// arr.buckets[idx] = nil
-		atomic.Storeuintptr(&hdr.lock, INVALID)
+		atomic.Store(&hdr.state, INVALID)
+		unlock(&hdr.lock)
 		g.releaseBucket = nil
 
 		// Also decrement number of buckets
@@ -1641,11 +1395,9 @@ func mapacquire(t *maptype, h *hmap, key unsafe.Pointer) {
 	info.cmap = h.chdr
 	cmap := (*concurrentMap)(h.chdr)
 	arr := &cmap.root
-	var hash, idx, spins uintptr
-	var backoff int64
+	var hash, idx uintptr
 	var hdr *bucketHdr
 	g := getg()
-	gptr := uintptr(unsafe.Pointer(g))
 
 	// If we already have this key interlocked we are done.
 	for _, data := range g.interlockedData {
@@ -1668,22 +1420,19 @@ test:
 	for hdr == nil {
 		// Note that bucketData has the same first 3 fields as bucketHdr, and can be safely casted
 		newHdr := (*bucketHdr)(newobject(t.bucketdata))
-		// Since we're setting it, may as well attempt to acquire lock
-		newHdr.lock = gptr
+		// Since we're setting it, may as well attempt to acquire lock and fill out fields
+		lock(&newHdr.lock)
 		newHdr.parent = arr
 		newHdr.parentIdx = uint32(idx)
-		newHdr.count = uint32(1)
 		// If we fail, then some other Goroutine has already placed theirs.
 		if atomic.Casp1((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil, unsafe.Pointer(newHdr)) {
 			// If we succeed, then we own this bucket and need to keep track of it
-			info.hdr = newHdr
-			// Also increment count of buckets
-			atomic.Xadd(&arr.count, 1)
-			atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
+			g.releaseBucket = unsafe.Pointer(newHdr)
 
-			// Since we just created this bucket, we can easily assign to the first slot.
 			data := (*bucketData)(unsafe.Pointer(newHdr))
-			data.assign(t, uint32(0), hash, key, nil)
+			data.assign(t, 0, hash, key, nil)
+			atomic.Store(&newHdr.count, 1)
+			atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
 
 			info.key = data.key(t, uint32(0))
 			info.value = data.value(t, uint32(0))
@@ -1691,106 +1440,42 @@ test:
 
 			// Mark as being not-present so it will be cleaned up if the user never assigns to it.
 			info.flags |= KEY_DELETED
-
 			return
+		} else {
+			unlock(&newHdr.lock)
 		}
 		// Reload hdr
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 	}
 
-	// Attempt to acquire lock
-	for {
-		// Reset backoff variables
-		spins = 0
-		backoff = DEFAULT_BACKOFF
+	state := atomic.Load(&hdr.state)
 
-		// Testing lock
-		lock := atomic.Loaduintptr(&hdr.lock)
-
-		// If the state of the bucket is INVALID, then either it's been deleted or been converted into an ARRAY; Reload and try again
-		if lock == INVALID {
-			// Reload hdr, since what it was pointed to has changed
-			hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
-			// Test hdr again; skip rehashing
-			goto test
-		}
-
-		// If it's recursive, try again on new bucket
-		if lock == ARRAY {
-			arr = (*bucketArray)(unsafe.Pointer(hdr))
-			goto next
-		}
-
-		// If we hold the lock
-		if lock == gptr {
-			break
-		}
-
-		// If the lock is uncontested
-		if lock == UNLOCKED {
-			// Attempt to acquire
-			if atomic.Casuintptr(&hdr.lock, UNLOCKED, gptr) {
-				info.hdr = hdr
-				break
-			}
-			continue
-		}
-
-		// Keep track of the current lock-holder
-		holder := lock & LOCKED_MASK
-
-		// Tight-spin until the current lock-holder releases lock
-		for {
-			done := false
-			for i := 0; i < GOSCHED_AFTER_SPINS; i, spins = i+1, spins+1 {
-				// We test the lock on each iteration
-				lock = atomic.Loaduintptr(&hdr.lock)
-				// If the previous lock-holder released the lock, attempt to acquire again.
-				if lock != holder {
-					if spins > 100000 {
-						println("...g # ", g.goid, ": Spins:", spins, ", Backoff:", backoff)
-					}
-					done = true
-					break
-				}
-
-				procyield(uint32(MIN_SPIN_CYCLES))
-			}
-			if done {
-				break
-			}
-			Gosched()
-
-			if spins > 1000000 {
-				println("...g # ", g.goid, ": Function: cmapassign, Crash Dump: {")
-				println("holder: ", holder)
-				println("lock: ", lock)
-				println("gptr: ", gptr)
-				println("hdr: {")
-				println("\taddress: ", hdr)
-				println("\tcount: ", hdr.count)
-				println("\tlock: ", hdr.lock)
-				println("\tparent: {")
-				println("\t\taddress: ", hdr.parent)
-				println("\t\tlock: ", hdr.parent.lock)
-				println("\t\tcount: ", hdr.parent.count)
-				println("\t\tlen: ", len((*bucketArray)(unsafe.Pointer(hdr.parent)).buckets))
-				println("\t}")
-				println("\tparentIdx: ", hdr.parentIdx)
-				println("}")
-
-				throw("Deadlock Detected!")
-			}
-		}
+	// If it's recursive, try again on new bucket
+	if state == ARRAY {
+		// println("Old Array Length:", len(arr.buckets))
+		arr = (*bucketArray)(unsafe.Pointer(hdr))
+		// println("New Array Length:", len(arr.buckets))
+		goto next
 	}
 
-	info.hdr = hdr
+	// Contest lock
+	lock(&hdr.lock)
 
+	// If the state of the bucket is INVALID, then either it's been deleted
+	// or been converted into a bucketArray; Reload and test it again.
+	if state == INVALID {
+		unlock(&hdr.lock)
+		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
+		goto test
+	}
+
+	g.releaseBucket = unsafe.Pointer(hdr)
+	info.hdr = hdr
 	data := (*bucketData)(unsafe.Pointer(hdr))
 	firstEmpty := -1
 
-	// If we do not find the requested key to interlock, we must create a new key for the user... same song and dance
-	// as cmapassign....
+	// If we do not find the requested key to interlock, we must create a new key for the user...
+	// same song and dance as cmapassign....
 	// Otherwise, we must scan all hashes to find a matching hash; if they match, check if they are equal
 	for i, count := uint32(0), hdr.count; i < MAX_SLOTS && count > 0; i++ {
 		currHash := data.tophash[i]
@@ -1829,7 +1514,7 @@ test:
 		// println("g #", getg().goid, ": Resizing...")
 		// Allocate and initialize
 		newArr := (*bucketArray)(newobject(t.bucketarray))
-		newArr.lock = ARRAY
+		newArr.state = ARRAY
 		newArr.buckets = make([]*bucketHdr, len(arr.buckets)*2)
 		newArr.seed = fastrand1()
 		newArr.parent = arr
@@ -1876,7 +1561,8 @@ test:
 		// Update and then invalidate to point to nested ARRAY
 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
-		atomic.Storeuintptr(&hdr.lock, INVALID)
+		atomic.Store(&hdr.state, INVALID)
+		unlock(&hdr.lock)
 
 		// Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for our current key-value.
 		// In this case try again, to reduce contention and increase concurrency over the lock
@@ -1894,11 +1580,12 @@ test:
 	}
 	// TODO: What if t.indirectvalue is true? Correct this!
 	// At this point, firstEmpty is guaranteed to be non-zero and within bounds, hence we can safely assign to it
-	data.assign(t, uint32(firstEmpty), hash, key, unsafe.Pointer(&DUMMY_RETVAL[0]))
+	data.assign(t, uint32(firstEmpty), hash, key, nil)
 	info.key = data.key(t, uint32(firstEmpty))
 	info.value = data.value(t, uint32(firstEmpty))
 	info.hash = &data.tophash[uint32(firstEmpty)]
 	info.flags |= KEY_DELETED
+
 	// Since we just assigned to a new empty slot, we need to increment count
 	atomic.Xadd(&hdr.count, 1)
 	atomic.Xadd((*uint32)(unsafe.Pointer(&h.count)), 1)
@@ -2157,11 +1844,6 @@ func cmapdelete_interlocked(t *maptype, info *interlockedInfo, h *hmap, key unsa
 		throw("Key indexed must be same as interlocked key!")
 	}
 
-	// If we do not hold the lock we messed up...
-	if info.hdr.lock != uintptr(unsafe.Pointer(getg())) {
-		throw("Interlocked function, but hdr owned is not ours!")
-	}
-
 	// If the key had already been 'deleted' we're done.
 	if (info.flags & KEY_DELETED) != 0 {
 		return
@@ -2204,13 +1886,14 @@ func maprelease_interlocked(t *maptype, h *hmap) {
 	if info.hdr.count == 0 {
 		// Invalidate and release the bucket (as it is being deleted)
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&info.hdr.parent.buckets[info.hdr.parentIdx])), nil)
-		atomic.Storeuintptr(&info.hdr.lock, INVALID)
+		atomic.Store(&info.hdr.state, INVALID)
+		unlock(&info.hdr.lock)
 
 		// Also decrement number of buckets
 		atomic.Xadd(&info.hdr.parent.count, -1)
 	} else {
 		// Otherwise, just release the lock on the bucket
-		atomic.Storeuintptr(&info.hdr.lock, UNLOCKED)
+		unlock(&info.hdr.lock)
 	}
 
 	interlocked_release(h)
@@ -2243,11 +1926,11 @@ func interlocked(t *maptype, h *hmap, key unsafe.Pointer) {
 	// 	info.cmap = h.chdr
 	// 	cmap := (*concurrentMap)(h.chdr)
 	// 	arr := &cmap.root
-	// 	var hash, idx, spins uintptr
+	// 	var hash, idx uintptr
 	// 	var backoff int64
 	// 	var hdr *bucketHdr
 	// 	g := getg()
-	// 	gptr := uintptr(unsafe.Pointer(g))
+	//
 	// 	var value unsafe.Pointer
 
 	// 	// If we are already interlocked on this map, throw an error. As well, since we are interlocking on a key, we should prohibit access to other keys in this map.
