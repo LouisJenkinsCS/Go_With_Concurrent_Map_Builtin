@@ -239,14 +239,14 @@ func main() {
 		// Combined
 		benchmarks{
 			[]benchmark{
-				// benchmark{
-				// 	combined_testing.BenchmarkConcurrentCombined,
-				// 	"Concurrent Map",
-				// },
-				// benchmark{
-				// 	combined_testing.BenchmarkStreamrailConcurrentCombined,
-				// 	"Streamrail Concurrent Map",
-				// },
+				benchmark{
+					combined_testing.BenchmarkConcurrentCombined,
+					"Concurrent Map",
+				},
+				benchmark{
+					combined_testing.BenchmarkStreamrailConcurrentCombined,
+					"Streamrail Concurrent Map",
+				},
 				benchmark{
 					combined_testing.BenchmarkGotomicConcurrentCombined,
 					"Gotomic Concurrent Map",
