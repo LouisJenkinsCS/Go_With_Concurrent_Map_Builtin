@@ -598,17 +598,24 @@ findKeyValue:
 		// println("...g #", getg().goid, ": Removing ourselves from waitlist, len:", len(data.notify.waiterKeys), "key:", atomic.Loaduintptr(&data.notify.lock.key))
 		lock(&data.notify.lock)
 		atomic.Xadd(&data.notify.waiters, -1)
+		removedSelf := false
 		// Remove ourself
 		for idx, key := range data.notify.waiterKeys {
 			// println("OurKey:", &citer.waitKey, "ThereKey:", key)
 			if key == &citer.waitKey {
+				removedSelf = true
 				// println("...g #", getg().goid, ": Removed from waitlist")
 				if idx != (len(data.notify.waiterKeys) - 1) {
 					data.notify.waiterKeys[idx] = data.notify.waiterKeys[len(data.notify.waiterKeys)-1]
-					data.notify.waiterKeys = data.notify.waiterKeys[:len(data.notify.waiterKeys)-1]
-					break
 				}
+				data.notify.waiterKeys = data.notify.waiterKeys[:len(data.notify.waiterKeys)-1]
+				break
 			}
+		}
+
+		if !removedSelf {
+			unlock(&data.notify.lock)
+			throw("Was not in waitlist of a bucket marked as being so...")
 		}
 
 		citer.flags = 0
@@ -746,8 +753,8 @@ test:
 	// If the lock-holder gave up the lock in between our check, we need to exit early
 	// to avoid a missed wakeup.
 	if atomic.Loaduintptr(&data.lock.key) == UNLOCKED {
-		unlock(&data.notify.lock)
 		atomic.Xadd(&data.notify.waiters, -1)
+		unlock(&data.notify.lock)
 		goto test
 	}
 
@@ -761,7 +768,9 @@ test:
 	// Called to poll thorugh any skipped buckets
 pollSkippedBuckets:
 	atomic.Store(&citer.waitKey, 0)
-	// println("...g #", getg().goid, ": Polling Skipped Buckets: ", len(citer.skippedBuckets))
+	if len(citer.skippedBuckets) > 25 {
+		println("...g #", getg().goid, ": Polling Skipped Buckets: ", len(citer.skippedBuckets))
+	}
 
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
@@ -769,6 +778,8 @@ pollSkippedBuckets:
 		// If we find all nil buckets, we are finished.
 		doneProcessing := true
 		for idx, hdr := range citer.skippedBuckets {
+			addToWaitlist := false
+		top:
 			// If the pointer is nil, we already processed it,
 			if hdr == nil {
 				continue
@@ -796,14 +807,9 @@ pollSkippedBuckets:
 			// In the case where it is marked INVALID, we reload the bucket and poll on it next time around
 			if state == INVALID {
 				citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
-				doneProcessing = false
-				continue
-			}
-
-			// There is no data here (yet), dispose of it.
-			if atomic.Load(&hdr.count) == 0 {
-				citer.skippedBuckets[idx] = nil
-				continue
+				hdr = citer.skippedBuckets[idx]
+				addToWaitlist = true
+				goto top
 			}
 
 			// Fast-Path: If we can quickly acquire a lock on a bucket, do so.
@@ -819,8 +825,9 @@ pollSkippedBuckets:
 						g.releaseBucket = unsafe.Pointer(hdr)
 						maprelease()
 						citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
-						doneProcessing = false
-						continue
+						hdr = citer.skippedBuckets[idx]
+						addToWaitlist = true
+						goto top
 					}
 
 					// Begin processing the interlocked bucket
@@ -835,6 +842,20 @@ pollSkippedBuckets:
 				}
 			}
 
+			if addToWaitlist {
+				data := (*bucketData)(unsafe.Pointer(hdr))
+				lock(&data.notify.lock)
+				atomic.Xadd(&data.notify.waiters, 1)
+
+				if atomic.Loaduintptr(&data.lock.key) == UNLOCKED {
+					atomic.Xadd(&data.notify.waiters, -1)
+					unlock(&data.notify.lock)
+					goto top
+				}
+
+				data.notify.waiterKeys = append(data.notify.waiterKeys, &citer.waitKey)
+				unlock(&data.notify.lock)
+			}
 			// At this point, this bucket cannot be processed yet
 			doneProcessing = false
 		}
