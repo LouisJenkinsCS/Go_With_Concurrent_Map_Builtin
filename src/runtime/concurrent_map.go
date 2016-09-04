@@ -583,10 +583,12 @@ findKeyValue:
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&data.parent.buckets[data.parentIdx])), nil)
 		atomic.Store(&data.state, INVALID)
 		atomic.Xadd(&data.parent.count, -1)
-		unlock(&data.lock)
+		getg().releaseBucket = unsafe.Pointer(data)
+		maprelease()
 	} else {
 		// Otherwise, just release the lock on the bucket
-		unlock(&data.lock)
+		getg().releaseBucket = unsafe.Pointer(data)
+		maprelease()
 	}
 
 	// Scan the list and notify.. See maprelease for more comments.
@@ -711,7 +713,8 @@ test:
 			// In the case that this bucket has been abandoned, we can't just go ahead and process it.
 			// Hence in the case it is in an INVALID state, we must reload and test it again.
 			if atomic.Load(&hdr.state) == INVALID {
-				unlock(&hdr.lock)
+				g.releaseBucket = unsafe.Pointer(hdr)
+				maprelease()
 				hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
 				goto test
 			}
@@ -813,7 +816,8 @@ pollSkippedBuckets:
 					// In the case that this bucket has been abandoned, we can't just go ahead and process it.
 					// Hence in the case it is in an INVALID state, we must reload and test it again.
 					if atomic.Load(&hdr.state) == INVALID {
-						unlock(&hdr.lock)
+						g.releaseBucket = unsafe.Pointer(hdr)
+						maprelease()
 						citer.skippedBuckets[idx] = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&hdr.parent.buckets[hdr.parentIdx])))
 						doneProcessing = false
 						continue
@@ -1018,7 +1022,8 @@ test:
 	// If the state of the bucket is INVALID, then either it's been deleted
 	// or been converted into a bucketArray; Reload and test it again.
 	if state == INVALID {
-		unlock(&hdr.lock)
+		g.releaseBucket = unsafe.Pointer(hdr)
+		maprelease()
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 		goto test
 	}
@@ -1121,7 +1126,8 @@ test:
 		// println("len: ", len(arr.buckets), "parentIdx: ", data.parentIdx, ", idx: ", idx)
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
 		atomic.Store(&hdr.state, INVALID)
-		unlock(&hdr.lock)
+		g.releaseBucket = unsafe.Pointer(hdr)
+		maprelease()
 
 		// Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for our current key-value.
 		// In this case try again, to reduce contention and increase concurrency over the lock
@@ -1221,7 +1227,8 @@ test:
 	// If the state of the bucket is INVALID, then either it's been deleted
 	// or been converted into a bucketArray; Reload and test it again.
 	if state == INVALID {
-		unlock(&hdr.lock)
+		g.releaseBucket = unsafe.Pointer(hdr)
+		maprelease()
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 		goto test
 	}
@@ -1399,7 +1406,8 @@ test:
 	// If the state of the bucket is INVALID, then either it's been deleted
 	// or been converted into a bucketArray; Reload and test it again.
 	if state == INVALID {
-		unlock(&hdr.lock)
+		g.releaseBucket = unsafe.Pointer(hdr)
+		maprelease()
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 		goto test
 	}
@@ -1450,7 +1458,7 @@ test:
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), nil)
 		// arr.buckets[idx] = nil
 		atomic.Store(&hdr.state, INVALID)
-		unlock(&hdr.lock)
+		maprelease()
 		g.releaseBucket = nil
 
 		// Also decrement number of buckets
@@ -1554,7 +1562,8 @@ test:
 	// If the state of the bucket is INVALID, then either it's been deleted
 	// or been converted into a bucketArray; Reload and test it again.
 	if state == INVALID {
-		unlock(&hdr.lock)
+		g.releaseBucket = unsafe.Pointer(hdr)
+		maprelease()
 		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&arr.buckets[idx])))
 		goto test
 	}
@@ -1977,13 +1986,15 @@ func maprelease_interlocked(t *maptype, h *hmap) {
 		// Invalidate and release the bucket (as it is being deleted)
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&info.hdr.parent.buckets[info.hdr.parentIdx])), nil)
 		atomic.Store(&info.hdr.state, INVALID)
-		unlock(&info.hdr.lock)
+		g.releaseBucket = unsafe.Pointer(info.hdr)
+		maprelease()
 
 		// Also decrement number of buckets
 		atomic.Xadd(&info.hdr.parent.count, -1)
 	} else {
 		// Otherwise, just release the lock on the bucket
-		unlock(&info.hdr.lock)
+		g.releaseBucket = unsafe.Pointer(info.hdr)
+		maprelease()
 	}
 
 	interlocked_release(h)

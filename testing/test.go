@@ -57,19 +57,19 @@ func interlockedFnc(val *T, pres bool) {
 
 func main() {
 	m := make(map[int]T, 1000, 1)
-	key := 1
-	sync.Interlocked(m, key)
-	v, pres := m[key]
-	fmt.Printf("Val: %v,Present: %v\n", v, pres)
-	m[key] = T{1}
-	v, pres = m[key]
-	fmt.Printf("Val: %v,Present: %v\n", v, pres)
-	delete(m, key)
-	v, pres = m[key]
-	fmt.Printf("Val: %v,Present: %v\n", v, pres)
-	sync.Release(m)
-	v, pres = m[key]
-	fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	// key := 1
+	// sync.Interlocked(m, key)
+	// v, pres := m[key]
+	// fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	// m[key] = T{1}
+	// v, pres = m[key]
+	// fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	// delete(m, key)
+	// v, pres = m[key]
+	// fmt.Printf("Val: %v,Present: %v\n", v, pres)
+	// sync.Release(m)
+	// v, pres = m[key]
+	// fmt.Printf("Val: %v,Present: %v\n", v, pres)
 	for i := 0; i < 1000; i++ {
 		m[i] = T{}
 	}
