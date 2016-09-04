@@ -254,16 +254,17 @@ func concurrentIterator(t *Type) *Type {
 		return t.MapType().ConcurrentIterator
 	}
 
-	var field [9]*Field
+	var field [10]*Field
 	field[0] = makefield("idx", Types[TUINT32])
 	field[1] = makefield("offset", Types[TUINT32])
 	field[2] = makefield("flags", Types[TUINT32])
 	field[3] = makefield("depth", Types[TUINT32])
-	field[4] = makefield("arr", Ptrto(bucketArray(t)))
-	field[5] = makefield("startIdx", typSlice(Types[TUINT32]))
-	field[6] = makefield("g", Types[TUNSAFEPTR])
-	field[7] = makefield("data", Types[TUNSAFEPTR])
-	field[8] = makefield("skippedBuckets", typSlice(Ptrto(bucketHdr(t))))
+	field[4] = makefield("waitKey", Types[TUINT32])
+	field[5] = makefield("arr", Ptrto(bucketArray(t)))
+	field[6] = makefield("startIdx", typSlice(Types[TUINT32]))
+	field[7] = makefield("g", Types[TUNSAFEPTR])
+	field[8] = makefield("data", Types[TUNSAFEPTR])
+	field[9] = makefield("skippedBuckets", typSlice(Ptrto(bucketHdr(t))))
 
 	citer := typ(TSTRUCT)
 	citer.Noalg = true
@@ -328,15 +329,26 @@ func bucketData(t *Type) *Type {
 	keyArr.Noalg = true
 	valArr.Noalg = true
 
-	var field [8]*Field
+	waitList := typ(TSTRUCT)
+	waitList.Noalg = true
+	var wlfield [3]*Field
+	wlfield[0] = makefield("lock", Types[TUINTPTR])
+	wlfield[1] = makefield("waiters", Types[TUINT32])
+	wlfield[2] = makefield("waiterKeys", typSlice(Ptrto(Types[TUINT32])))
+	waitList.SetFields(wlfield[:])
+	dowidth(waitList)
+	waitList.Local = t.Local
+
+	var field [9]*Field
 	field[0] = makefield("lock", Types[TUINTPTR])
 	field[1] = makefield("state", Types[TUINT32])
 	field[2] = makefield("count", Types[TUINT32])
 	field[3] = makefield("parentIdx", Types[TUINT32])
 	field[4] = makefield("parent", Types[TUNSAFEPTR])
-	field[5] = makefield("tophash", typArray(Types[TUINT8], int64(nChains)))
-	field[6] = makefield("keys", keyArr)
-	field[7] = makefield("values", valArr)
+	field[5] = makefield("notify", waitList)
+	field[6] = makefield("tophash", typArray(Types[TUINT8], int64(nChains)))
+	field[7] = makefield("keys", keyArr)
+	field[8] = makefield("values", valArr)
 
 	bdata.SetFields(field[:])
 	dowidth(bdata)

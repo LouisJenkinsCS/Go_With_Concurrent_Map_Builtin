@@ -85,21 +85,21 @@ func main() {
 		go func() {
 			iterations := 0
 			start.Wait()
-			// for k, v := range m {
-			// 	v.iter++
-			// 	t := m[k]
-			// 	t.iter = t.iter + 1
-			// 	m[k] = t
-			// 	iterations++
-			// }
-			for i := 0; i < 1000; i++ {
-				sync.Interlocked(m, i)
-				t := m[i]
+			for k, v := range m {
+				v.iter++
+				t := m[k]
 				t.iter = t.iter + 1
-				m[i] = t
-				sync.Release(m)
+				m[k] = t
 				iterations++
 			}
+			// for i := 0; i < 1000; i++ {
+			// 	sync.Interlocked(m, i)
+			// 	t := m[i]
+			// 	t.iter = t.iter + 1
+			// 	m[i] = t
+			// 	sync.Release(m)
+			// 	iterations++
+			// }
 			fmt.Printf("Iterations: %v\n", iterations)
 			wg.Done()
 		}()

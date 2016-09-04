@@ -132,6 +132,10 @@ const (
 	// This will be mentioned once: We reset the backoff variables when the lock-holder relinquishes the lock to prevent excessive spinning.
 	LOCKED_MASK = ^uintptr(0x3)
 
+	// Flag used to determine if the current bucket we are on has us in that waitlist (and so we should)
+	// remove ourselves.
+	IN_WAIT_LIST = 1 << 0
+
 	// Hash value signifying that the hash is not in use.
 	EMPTY      = 0
 	HASH_SHIFT = sys.PtrSize*8 - 8
@@ -228,6 +232,7 @@ type bucketData struct {
 	parentIdx uint32
 	parent    *bucketArray
 
+	notify waitlist
 	// Hash of the key-value corresponding to this index. If it is 0, it is empty. Top byte to reduce overall size.
 	tophash [MAX_SLOTS]uint8
 	// It's key and value slots are below, and would appear as such if the runtime supported generics...
@@ -235,6 +240,12 @@ type bucketData struct {
 	   key [MAX_SLOTS]keyType
 	   val [MAX_SLOTS]valType
 	*/
+}
+
+type waitlist struct {
+	lock       mutex
+	waiters    uint32
+	waiterKeys []*uint32
 }
 
 /*
@@ -263,6 +274,8 @@ type concurrentIterator struct {
 	flags uint32
 	// Determines our current depth we have recursed from the root; used specifically when we are iterating through all skipped buckets
 	depth uint32
+	// The unique key used to wait.
+	waitKey uint32
 	// The bucketArray we currently are working on
 	arr *bucketArray
 	// Used to keep track of the randomized start position we wrap up to.
@@ -489,7 +502,6 @@ func cmapiternext(it *hiter) {
 	var data *bucketData
 	var hdr *bucketHdr
 	var key, value unsafe.Pointer
-	var spins int64
 	var idx, offset, startIdx, state uint32
 
 	citer := (*concurrentIterator)(it.citerHdr)
@@ -569,12 +581,51 @@ findKeyValue:
 	if data.count == 0 {
 		// Invalidate and release the bucket (as it is being deleted).
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&data.parent.buckets[data.parentIdx])), nil)
-		atomic.Store(&hdr.state, INVALID)
+		atomic.Store(&data.state, INVALID)
 		atomic.Xadd(&data.parent.count, -1)
-		unlock(&hdr.lock)
+		unlock(&data.lock)
 	} else {
 		// Otherwise, just release the lock on the bucket
-		unlock(&hdr.lock)
+		unlock(&data.lock)
+	}
+
+	// Scan the list and notify.. See maprelease for more comments.
+	// If we are in the wait-list, we also have to scan it regardless of
+	// if it is locked or not.
+	if (citer.flags & IN_WAIT_LIST) != 0 {
+		// println("...g #", getg().goid, ": Removing ourselves from waitlist, len:", len(data.notify.waiterKeys), "key:", atomic.Loaduintptr(&data.notify.lock.key))
+		lock(&data.notify.lock)
+		atomic.Xadd(&data.notify.waiters, -1)
+		// Remove ourself
+		for idx, key := range data.notify.waiterKeys {
+			// println("OurKey:", &citer.waitKey, "ThereKey:", key)
+			if key == &citer.waitKey {
+				// println("...g #", getg().goid, ": Removed from waitlist")
+				if idx != (len(data.notify.waiterKeys) - 1) {
+					data.notify.waiterKeys[idx] = data.notify.waiterKeys[len(data.notify.waiterKeys)-1]
+					data.notify.waiterKeys = data.notify.waiterKeys[:len(data.notify.waiterKeys)-1]
+					break
+				}
+			}
+		}
+
+		citer.flags = 0
+		unlock(&data.notify.lock)
+	}
+
+	// If the mutex is still unlocked, notify potential waiters.
+	if atomic.Loaduintptr(&data.lock.key) == UNLOCKED && atomic.Load(&data.notify.waiters) != 0 {
+		// println("...g #", getg().goid, ": Signaling waiters...")
+		lock(&data.notify.lock)
+
+		// Notify all
+		if atomic.Load(&data.notify.waiters) != 0 {
+			for _, key := range data.notify.waiterKeys {
+				// println("...g #", getg().goid, ": Signaled waiter #", idx)
+				semrelease(key)
+			}
+		}
+		unlock(&data.notify.lock)
 	}
 
 	// Zero all fields to help GC
@@ -644,6 +695,12 @@ test:
 		goto next
 	}
 
+	// Reload and test again.
+	if atomic.Load(&hdr.state) == INVALID {
+		hdr = (*bucketHdr)(atomic.Loadp(unsafe.Pointer(&citer.arr.buckets[idx])))
+		goto test
+	}
+
 	// Fast-Path: If we can quickly acquire a lock on a bucket, do so.
 	if atomic.Loaduintptr(&hdr.lock.key) == 0 {
 		// We need to increment the count of locks held, even if we do not have the lock yet (to prevent
@@ -664,19 +721,44 @@ test:
 			goto findKeyValue
 		}
 		g.m.locks--
+		if g.m.locks == 0 && g.preempt { // restore the preemption request in case we've cleared it in newstack
+			g.stackguard0 = stackPreempt
+		}
 	}
 
 	// At this point, the bucket's lock is being contended, and so we skip this bucket to
 	// be processed later.
 	// TODO: Add ourselves to wait list.
+	data = (*bucketData)(unsafe.Pointer(hdr))
+	// println("...g #", getg().goid, ": Adding self to waitlist: ", len(data.notify.waiterKeys))
+	lock(&data.notify.lock)
+
+	// Race Condition Resolution:
+	// 1) They're still processing the bucket and hold the bucket lock, and hence it is fine
+	// 2) They just released the lock and read the number of waiters before us, upon which we exit early
+	// 3) They just released the lock, but we already incremented the number of waiters, and so they're waiting to notify.
+	//
+	// These 3 points, and all in between, are resolved. False Positive >> False Negative
+	atomic.Xadd(&data.notify.waiters, 1)
+	// If the lock-holder gave up the lock in between our check, we need to exit early
+	// to avoid a missed wakeup.
+	if atomic.Loaduintptr(&data.lock.key) == UNLOCKED {
+		unlock(&data.notify.lock)
+		atomic.Xadd(&data.notify.waiters, -1)
+		goto test
+	}
+
+	// Add ourselves to the wait-list
+	data.notify.waiterKeys = append(data.notify.waiterKeys, &citer.waitKey)
+	// println("...g #", getg().goid, ": Added self to waitlist: ", len(data.notify.waiterKeys))
 	citer.skippedBuckets = append(citer.skippedBuckets, citer.arr.buckets[idx])
+	unlock(&data.notify.lock)
 	goto next
 
 	// Called to poll thorugh any skipped buckets
 pollSkippedBuckets:
-	// Reset backoff variables
-	spins = 0
-	backoff := DEFAULT_BACKOFF
+	atomic.Store(&citer.waitKey, 0)
+	// println("...g #", getg().goid, ": Polling Skipped Buckets: ", len(citer.skippedBuckets))
 
 	// At this point, we are iterating through any and all skipped buckets, polling for ones that are available.
 	for {
@@ -740,9 +822,13 @@ pollSkippedBuckets:
 					// Begin processing the interlocked bucket
 					info.hdr = hdr
 					citer.skippedBuckets[idx] = nil
+					citer.flags = IN_WAIT_LIST
 					goto findKeyValue
 				}
 				g.m.locks--
+				if g.m.locks == 0 && g.preempt { // restore the preemption request in case we've cleared it in newstack
+					g.stackguard0 = stackPreempt
+				}
 			}
 
 			// At this point, this bucket cannot be processed yet
@@ -753,21 +839,10 @@ pollSkippedBuckets:
 			break
 		}
 
-		// Handle polliing over buckets with some backoff.
-		// TODO: Use wait-list
-		if spins < GOSCHED_AFTER_SPINS {
-			procyield(uint32(MIN_SPIN_CYCLES + (spins * SPIN_INCREMENT)))
-		} else if spins < SLEEP_AFTER_SPINS {
-			Gosched()
-		} else {
-			timeSleep(int64(backoff))
-
-			// ≈1ms
-			if backoff < MAX_BACKOFF {
-				backoff *= 2
-			}
-		}
-		spins++
+		// println("...g #", getg().goid, ": Waiting on event;Key:", citer.waitKey)
+		semacquire(&citer.waitKey, false)
+		atomic.Store(&citer.waitKey, 0)
+		// println("...g #", getg().goid, ": Received signal!")
 	}
 
 	// If we make it this far, we've processed everything.
@@ -1077,8 +1152,24 @@ func maprelease() {
 	g := getg()
 	if g.releaseBucket != nil {
 		// println("g #", g.goid, ": released lock")
-		hdr := (*bucketHdr)(g.releaseBucket)
-		unlock(&hdr.lock)
+		data := (*bucketData)(g.releaseBucket)
+		unlock(&data.lock)
+
+		// If it is still unlocked, notify if there are waiters
+		// Note: If a waiter will be adding themselves to the list after we unlock, they MUST
+		// check the lock to determine if they should exit early.
+		if atomic.Loaduintptr(&data.lock.key) == 0 && atomic.Load(&data.notify.waiters) != 0 {
+			lock(&data.notify.lock)
+			if atomic.Load(&data.notify.waiters) == 0 {
+				unlock(&data.notify.lock)
+			} else {
+				// Notify all
+				for _, key := range data.notify.waiterKeys {
+					println("...g #", g.goid, ": Signaled waiter event")
+					semrelease(key)
+				}
+			}
+		}
 		g.releaseBucket = nil
 	}
 }
@@ -1557,12 +1648,12 @@ test:
 		}
 
 		// Now dispose of old data and update the header's bucket; We have to be careful to NOT overwrite the header portion
-		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})), uintptr(MAX_SLOTS)*(uintptr(1)+uintptr(t.keysize)+uintptr(t.valuesize)))
+		memclr(add(unsafe.Pointer(data), unsafe.Sizeof(bucketHdr{})+unsafe.Sizeof(waitlist{})), uintptr(MAX_SLOTS)*(uintptr(1)+uintptr(t.keysize)+uintptr(t.valuesize)))
 		// Update and then invalidate to point to nested ARRAY
 		// arr.buckets[idx] = (*bucketHdr)(unsafe.Pointer(newArr))
 		sync_atomic_StorePointer((*unsafe.Pointer)(unsafe.Pointer(&arr.buckets[idx])), unsafe.Pointer(newArr))
 		atomic.Store(&hdr.state, INVALID)
-		unlock(&hdr.lock)
+		maprelease()
 
 		// Now that we have converted the bucket successfully, we still haven't assigned nor found a spot for our current key-value.
 		// In this case try again, to reduce contention and increase concurrency over the lock
