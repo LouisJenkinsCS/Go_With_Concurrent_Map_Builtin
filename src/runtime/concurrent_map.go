@@ -1160,15 +1160,14 @@ func maprelease() {
 		// check the lock to determine if they should exit early.
 		if atomic.Loaduintptr(&data.lock.key) == 0 && atomic.Load(&data.notify.waiters) != 0 {
 			lock(&data.notify.lock)
-			if atomic.Load(&data.notify.waiters) == 0 {
-				unlock(&data.notify.lock)
-			} else {
-				// Notify all
+			// Notify all
+			if atomic.Load(&data.notify.waiters) != 0 {
 				for _, key := range data.notify.waiterKeys {
-					println("...g #", g.goid, ": Signaled waiter event")
+					// println("...g #", getg().goid, ": Signaled waiter #", idx)
 					semrelease(key)
 				}
 			}
+			unlock(&data.notify.lock)
 		}
 		g.releaseBucket = nil
 	}
