@@ -2,6 +2,14 @@
 
 A fork of the Go programming language, with a new and powerful built-in concurrent map type. The fork provides a very scalable and concurrent lock-based hash table with relatively sane semantics. 
 
+# Progress
+
+- [x] Insertion
+- [x] Lookup
+- [x] Removal
+- [x] Iteration
+- [ ] Reflection
+
 # Usage
 
 ## Creation
