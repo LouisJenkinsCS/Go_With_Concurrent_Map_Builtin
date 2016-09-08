@@ -3,8 +3,11 @@ package iterator_testing
 import (
 	"runtime"
 	"settings"
+	"strconv"
 	"sync"
 	"testing"
+
+	cmap "github.com/streamrail/concurrent-map"
 )
 
 type T struct {
@@ -29,6 +32,29 @@ func BenchmarkConcurrentIterator_RW(b *testing.B) {
 				t := cmap[k]
 				t.iter++
 				cmap[k] = t
+			}
+		}
+	})
+}
+
+func BenchmarkStreamrailConcurrentIterator_RW(b *testing.B) {
+	scmap := cmap.New()
+
+	// Initialize the map with a fixed number of elements.
+	for i := int64(0); i < settings.ITERATOR_NUM_ELEMS; i++ {
+		scmap.Set(strconv.FormatInt(i, 10), T{})
+	}
+
+	// Begin iteration test
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			for item := range scmap.IterBuffered() {
+				scmap.Upsert(item.Key, item.Val, func(exists bool, valueInMap interface{}, newValue interface{}) interface{} {
+					nv := newValue.(T)
+					nv.iter++
+					return nv
+				})
 			}
 		}
 	})

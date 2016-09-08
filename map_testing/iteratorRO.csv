@@ -1,5 +1,5 @@
-iteratorRO,1,2,4,6,8,10,12,18,24,28
-Concurrent Map,0.15,0.16,0.31,0.46,0.60,0.74,0.89,1.10,1.31,1.32
-Streamrail Concurrent Map,0.05,0.08,0.17,0.25,0.34,0.41,0.45,0.58,0.61,0.59
-Gotomic Concurrent Map,0.08,0.15,0.28,0.42,0.57,0.71,0.84,1.16,1.20,1.44
-Default Map (No Mutex),0.57,1.00,1.99,2.98,3.99,4.97,5.88,6.35,6.73,6.74
+iteratorRO,1,2,4,6,8
+Concurrent Map,2.71,4.49,7.94,11.07,12.73
+Streamrail Concurrent Map,0.71,1.35,2.30,2.70,2.78
+Gotomic Concurrent Map,1.41,2.92,5.94,7.52,8.48
+Default Map (No Mutex),5.99,11.64,20.60,24.83,27.20

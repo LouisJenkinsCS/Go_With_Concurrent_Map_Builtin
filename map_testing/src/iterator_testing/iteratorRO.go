@@ -42,7 +42,7 @@ func BenchmarkStreamrailConcurrentIterator_RO(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			for item := range scmap.Iter() {
+			for item := range scmap.IterBuffered() {
 				_ = item.Key
 				_ = item.Val
 			}

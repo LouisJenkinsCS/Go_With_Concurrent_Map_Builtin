@@ -349,7 +349,7 @@ func BenchmarkStreamrailConcurrentCombinedSkim_RO(b *testing.B) {
 			// .75 <= randRatio < 1 -> Iterate
 			default:
 				// Each iteration counts as an operation (as it calls mapiternext)
-				for item := range scmap.Iter() {
+				for item := range scmap.IterBuffered() {
 					_ = item.Key
 					_ = item.Val
 				}

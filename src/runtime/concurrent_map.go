@@ -370,6 +370,7 @@ func profile_map(h *hmap) {
 	arr := &cmap.root
 	var idx uint32
 	var depth, nData, nArr int
+	nArrPtrs := DEFAULT_BUCKETS
 	// Arbitrary max; if we ever go out of bounds, we're in trouble!
 	depthMap := make([]uint64, 1)
 next:
@@ -385,10 +386,10 @@ next:
 				dataAtDepth = depthMap[idx] & uint64(^uint32(0))
 				println("Depth:", idx, ";nData:", dataAtDepth, "nArray:", arrAtDepth)
 			}
-			println("Sizeof: bucketData(EList)=", unsafe.Sizeof(bucketData{}))
+			println("Sizeof: bucketData(EList)=", uint64(unsafe.Sizeof(bucketData{}))+uint64(16*8))
 			println("Sizeof: bucketArray(PList)=", unsafe.Sizeof(bucketArray{}))
-			println("Size of all bucketData(EList)=", uint64(unsafe.Sizeof(bucketData{}))*uint64(nData))
-			println("Size of all bucketArray(PList)=", uint64(unsafe.Sizeof(bucketArray{}))*uint64(nArr))
+			println("Size of all bucketData(EList)=", (uint64(unsafe.Sizeof(bucketData{}))+uint64(16*8))*uint64(nData))
+			println("Size of all bucketArray(PList)=", uint64(unsafe.Sizeof(bucketArray{}))*uint64(nArr)+uint64(sys.PtrSize*nArrPtrs))
 			return
 		} else {
 			depth--
@@ -414,6 +415,7 @@ next:
 			depthMap = append(depthMap, 0)
 		}
 		arr = (*bucketArray)(unsafe.Pointer(hdr))
+		nArrPtrs += len(arr.buckets)
 		idx = 0
 	} else {
 		nData++
@@ -421,7 +423,7 @@ next:
 		depthMap[depth] = (arrAtDepth << 32) | dataAtDepth
 	}
 
-	print("\rData:", nData, ";Array:", nArr)
+	// print("\rData:", nData, ";Array:", nArr, ";nPtrs:", nArrPtrs)
 	goto next
 }
 
