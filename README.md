@@ -4,10 +4,20 @@ A fork of the Go programming language, with a new and powerful built-in concurre
 
 # Progress
 
+## Core
+
 - [x] Insertion
 - [x] Lookup
 - [x] Removal
 - [x] Iteration
+
+## Sync.Interlocked
+
+- [x] Single Key
+- [ ] Multi Key
+
+## Language Support
+
 - [ ] Reflection
 
 # Usage
