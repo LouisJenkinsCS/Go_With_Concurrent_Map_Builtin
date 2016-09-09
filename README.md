@@ -6,6 +6,13 @@ A fork of the Go programming language, with a new and powerful built-in concurre
 
 ## Core
 
+The backbone of any map; the operations it supports. Any and all maps, especially for compatibility with Go, NEED to support
+insert, lookup, removal, and of course, iteration. The below denotes the current status of the map in terms of completion. Keep in
+mind, for a concurrent map, this also includes the guarantee that these operations are fully atomic.
+
+Currently, all operations are supported and are guaranteed atomic, and also perform (I.E, Scale) EXTREMELY well. Currently to date, these
+operations beat all other implementations for a concurrent map currently available in Go (As Go-Gettable packages: Streamrail's Concurrent Map + Gotomic's Split-Ordered List Hash Table implementation)
+
 - [x] Insertion
 - [x] Lookup
 - [x] Removal
@@ -13,10 +20,23 @@ A fork of the Go programming language, with a new and powerful built-in concurre
 
 ## Sync.Interlocked
 
+The next necessity for a concurrent map: Sane semantics. The below denotes the current status of the map in terms of allowing the user to acquire the lock
+of individual keys.
+
+Currently, only acquisition of a single key is supported, however acquiring multiple keys is non-trivial but possible (but due to time constraints, may not be implemented for a while).
+Acquiring multiple keys involve specifying a global locking order, of which is already planned, but not yet implemented.
+
 - [x] Single Key
 - [ ] Multi Key
 
 ## Language Support
+
+For true Go compatibility, the ability to use reflection on the concurrent map, while not a necessity, is a nicety. This does not only include adding support for the concurrent map in
+terms of it's underlying type (I.E, a way to determine, reflectively, if a map is concurrent or not), but also support for core functions (I.E, printing a concurrent map).
+
+Unfortunately, this has not been done, and truthfully, I doubt it will be (by me anyway), as the map, as is, is enough to demonstrate it's uses. Currently, you cannot even print out the map
+while it is being modified due to the implementation (thanks to Go's minimalism) does not use a conventional for loop, but instead calls the `mapiternext` function directly. While this is
+a very simple fix, I don't feel up to it.
 
 - [ ] Reflection
 
@@ -32,6 +52,10 @@ Now there is a third argument, which is the 'concurrency level', wherein this is
 Goroutines that are expected to navigate the map. Just like how 'make' normally works, if the
 second or third arguments are left out, they are replaced with '0' in the compiler. If 'concurrency level'
 is '0', then it will create a normal hashmap. If concurrency > 0, then it will create an concurrent map.
+
+```go
+cmap := make(map[int]int, NUM_ELEMS, NUM_CONCURRENCY)
+```
 
 ## Compatibility
 
@@ -90,12 +114,23 @@ portion of the bucket.
 ```go
 // Acquire
 sync.Interlocked(map, key)
-map[key] = value
+// Do a 'UpdateIfPresentOrElseInsert'... which would be what other library-based implementations would call it...
+if obj, isPresent := map[key]; isPresent {
+	update(obj)
+} else {
+	map[key] = NewObj()
+}
 // Release
 sync.Release(map)
 ```
+ 
+ As well, notice you can even defer unlocking it like a mutex...
 
-Notice above that sync.Release does not require the key as well; this is because it keeps track of the
+ ```go
+ defer sync.Release(map)
+ ```
+
+Notice as well that sync.Release does not require the key as well; this is because it keeps track of the
 current key interlocked for you. With that said, there is a special invariant that will be brought up later.
 
 ### Iteration
@@ -162,6 +197,16 @@ concurrent map is about 8 - 9x faster. When you can have operations combined, it
 
 While the concurrent map does have limitations due to it's invariant, it is extremely useful.
 
+## Performance: Concurrent Map vs Others
+
+The two most interesting attempts at providing a concurrent map was Streamrail's and Gotomic's. While it is clear
+that Streamrail fails to compete with our map, Gotomic does make a promising competitor. This is because it is an
+implementation of the Split Ordered List Hash Table, which is a lock-free implementation. While it does not support
+proper Read-Write iteration, it was an interesting contendor, and is faster in some cases where there are a low amount
+of elements, but loses in majority of others. 
+
+P.S: This is a temporary README, don't expect it to look good yet.
+
 ### Benchmark Results
 
 #### Intset
@@ -169,9 +214,17 @@ While the concurrent map does have limitations due to it's invariant, it is extr
 Integer set tests insert, lookup, and removal being done by multiple Goroutines. Performance measurements are 
 taken in the amount of work being done in terms of how much time it takes to complete.
 
-![Intset Benchmark](screenshots/intset.png)
+##### 80/10/10 Lookup/Insert/Remove
 
-#### Read-Only Iteration
+![Intset Lookup Biased](screenshots/intsetLookup.png)
+
+##### 34/33/33 Lookup/Insert/Remove
+
+![Intset Benchmark](screenshots/intsetFair.png)
+
+#### Iteration
+
+##### Read-Only
 
 Tests raw iteration without the need for a lock. This demonstrates that the concurrent map is, in fact, slower
 than an unsynchronized map. This is an unfair test, however, as the concurrent map is lock-based, and so
@@ -179,7 +232,7 @@ it could never directly compete, however for credibility sake, we shows the ups 
 
 ![Read-Only Benchmark](screenshots/iteratorRO.png)
 
-#### Read-Write Iteration
+##### Read-Write
 
 Tests iteration wherein you can have mutations to the map. This also tests mutations of the current key itself, and demonstrates
 the ability of fast-pathing when accessing the map (on the key being iterated over) while iterating.
@@ -193,4 +246,10 @@ Tests all operations (insert, lookup, removal, and iteration), and shows the tru
 Note that, with a mutex, one must acquire it just to complete any one of these operations, while the concurrent map
 can freely do all of these operations safely.
 
-![Combined Benchmark](screenshots/combined.png)
+##### Read-Only Iteration
+
+![Combined Benchmark](screenshots/combinedRO.png)
+
+##### Read-Write Iteration
+
+![Combined Read-Write](screenshots/combinedRW.png)
