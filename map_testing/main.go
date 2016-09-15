@@ -4,6 +4,7 @@ import (
 	"combined_testing"
 	"flag"
 	"fmt"
+	"intset_testing"
 	"iterator_testing"
 	"os"
 	"runtime"
@@ -162,64 +163,64 @@ func main() {
 	}
 
 	benchmarks := []benchmarks{
-		// // Intset
-		// benchmarks{
-		// 	[]benchmark{
-		// 		benchmark{
-		// 			intset_testing.BenchmarkConcurrentIntset,
-		// 			"Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkStreamrailConcurrentIntset,
-		// 			"Streamrail Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkGotomicConcurrentIntset,
-		// 			"Gotomic Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkSynchronizedIntset,
-		// 			"Synchronized Map (Mutex)",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkReaderWriterIntset,
-		// 			"ReaderWriter Map (RWMutex)",
-		// 		},
-		// 	},
-		// 	"intset.csv",
-		// 	"intset",
-		// 	false,
-		// 	info,
-		// },
-		// // Intset - Bias
-		// benchmarks{
-		// 	[]benchmark{
-		// 		benchmark{
-		// 			intset_testing.BenchmarkConcurrentIntset_Bias,
-		// 			"Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkStreamrailConcurrentIntset_Bias,
-		// 			"Streamrail Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkGotomicConcurrentIntset_Bias,
-		// 			"Gotomic Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkSynchronizedIntset_Bias,
-		// 			"Synchronized Map (Mutex)",
-		// 		},
-		// 		benchmark{
-		// 			intset_testing.BenchmarkReaderWriterIntset_Bias,
-		// 			"ReaderWriter Map (RWMutex)",
-		// 		},
-		// 	},
-		// 	"intset_bias.csv",
-		// 	"intset_bias",
-		// 	false,
-		// 	info,
-		// },
+		// Intset
+		benchmarks{
+			[]benchmark{
+				benchmark{
+					intset_testing.BenchmarkConcurrentIntset,
+					"Concurrent Map",
+				},
+				benchmark{
+					intset_testing.BenchmarkStreamrailConcurrentIntset,
+					"Streamrail Concurrent Map",
+				},
+				benchmark{
+					intset_testing.BenchmarkGotomicConcurrentIntset,
+					"Gotomic Concurrent Map",
+				},
+				benchmark{
+					intset_testing.BenchmarkSynchronizedIntset,
+					"Synchronized Map (Mutex)",
+				},
+				benchmark{
+					intset_testing.BenchmarkReaderWriterIntset,
+					"ReaderWriter Map (RWMutex)",
+				},
+			},
+			"intset.csv",
+			"intset",
+			false,
+			info,
+		},
+		// Intset - Bias
+		benchmarks{
+			[]benchmark{
+				benchmark{
+					intset_testing.BenchmarkConcurrentIntset_Bias,
+					"Concurrent Map",
+				},
+				benchmark{
+					intset_testing.BenchmarkStreamrailConcurrentIntset_Bias,
+					"Streamrail Concurrent Map",
+				},
+				benchmark{
+					intset_testing.BenchmarkGotomicConcurrentIntset_Bias,
+					"Gotomic Concurrent Map",
+				},
+				benchmark{
+					intset_testing.BenchmarkSynchronizedIntset_Bias,
+					"Synchronized Map (Mutex)",
+				},
+				benchmark{
+					intset_testing.BenchmarkReaderWriterIntset_Bias,
+					"ReaderWriter Map (RWMutex)",
+				},
+			},
+			"intset_bias.csv",
+			"intset_bias",
+			false,
+			info,
+		},
 		// Read-Only Iterator
 		benchmarks{
 			[]benchmark{
@@ -299,27 +300,27 @@ func main() {
 			true,
 			info,
 		},
-		// // Combined - RW
-		// benchmarks{
-		// 	[]benchmark{
-		// 		benchmark{
-		// 			combined_testing.BenchmarkConcurrentCombinedSkim_RW,
-		// 			"Concurrent Map",
-		// 		},
-		// 		benchmark{
-		// 			combined_testing.BenchmarkSynchronizedCombinedSkim_RW,
-		// 			"Synchronized Map (Mutex)",
-		// 		},
-		// 		benchmark{
-		// 			combined_testing.BenchmarkReaderWriterCombinedSkim_RW,
-		// 			"ReaderWriter Map (RWMutex)",
-		// 		},
-		// 	},
-		// 	"combined_rw.csv",
-		// 	"combined_rw",
-		// 	true,
-		// 	info,
-		// },
+		// Combined - RW
+		benchmarks{
+			[]benchmark{
+				benchmark{
+					combined_testing.BenchmarkConcurrentCombinedSkim_RW,
+					"Concurrent Map",
+				},
+				benchmark{
+					combined_testing.BenchmarkSynchronizedCombinedSkim_RW,
+					"Synchronized Map (Mutex)",
+				},
+				benchmark{
+					combined_testing.BenchmarkReaderWriterCombinedSkim_RW,
+					"ReaderWriter Map (RWMutex)",
+				},
+			},
+			"combined_rw.csv",
+			"combined_rw",
+			true,
+			info,
+		},
 	}
 
 	runBenchmark(benchmarks)

@@ -1,0 +1,6 @@
+combined_ro,1,2,4,8,16
+Concurrent Map,2057.61,3086.42,5208.33,7633.59,7092.20
+Streamrail Concurrent Map,850.34,1483.68,2105.26,2150.54,2242.15
+Gotomic Concurrent Map,1162.79,2155.17,3861.00,4975.12,4950.50
+Synchronized Map (Mutex),4291.85,3508.77,3300.33,3246.75,3289.47
+ReaderWriter Map (RWMutex),4065.04,3125.00,2994.01,2976.19,2985.07
