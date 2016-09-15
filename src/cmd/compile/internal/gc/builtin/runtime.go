@@ -103,8 +103,6 @@ func mapiternext(hiter *any)
 func maprelease()
 func cmapiterinit(mapType *byte, hmap map[any]any, hiter *any)
 func cmapiternext(hiter *any)
-func interlocked(mapType *byte, hmap map[any]any, key *any, create bool, fn func(value *any, pres bool)) bool
-func interlockedPtr(mapType *byte, hmap map[any]any, key *any, create bool, fn func(value any, pres bool)) bool
 
 // *byte is really *runtime.Type
 func makechan(chanType *byte, hint int64) (hchan chan any)

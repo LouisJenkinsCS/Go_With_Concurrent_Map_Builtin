@@ -79,8 +79,6 @@ const (
 	hasBreak = 1 << iota
 	notLiveAtEnd
 	isClosureVar
-	// L.J: sync.Interlocked variant range
-	isInterlockedRange = 1 << 7
 )
 
 func (n *Node) HasBreak() bool {

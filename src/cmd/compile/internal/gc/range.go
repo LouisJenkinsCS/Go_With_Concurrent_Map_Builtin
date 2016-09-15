@@ -158,10 +158,6 @@ func walkrange(n *Node) {
 	// to avoid erroneous processing by racewalk.
 	n.List.Set(nil)
 
-	if (n.flags&isInterlockedRange) != 0 && t.Etype != TMAP {
-		Yyerror("Cannot use sync.Interlocked with non-map type")
-	}
-
 	var body []*Node
 	var init []*Node
 	switch t.Etype {
