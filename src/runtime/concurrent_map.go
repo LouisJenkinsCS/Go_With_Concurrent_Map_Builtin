@@ -117,34 +117,61 @@ package runtime
 		Iteration has one 'invariant' which may be a bit inconvenient, but at the same time
 		provides high-scalability and allows concurrent (and parallel) mutations to occur
 		while doing so. While iterating, you are in a mode referred to as 'interlocked access',
-		which will be described in detail later.
+		which will be described in detail later. In brief: You may only hold the lock on
+		one bucket at any given time (the bucket you are iterating over), and so as it intuitively
+		follows...you can have as many concurrent accesses as you have buckets.
 
-	Each bucket contains as Test-and-Test-and-Set Spinlock implementation, which provides
-	mutual exclusion to each bucket. Before any Goroutine may access or mutate the data slots
-	of which that bucket holds, they must acquire it's spinlock. The spinlock itself
-	not only provides mutual exclusion, but as well describes it's state.
+		The biggest issue with iteration is the problem of lock convoying: In brief, given
+		an iterator A which takes 100ms, and an iterator B which takes 10ms, and an
+		iterator C which takes 1ms, and given N buckets with M depth:
 
-	NOTE: This section is liable to change, and most likely will.
+			If A holds the lock on a bucket that B wants, then B must want for A even though
+			it would originally finish within 10ms (only a 1/10th the time of A), and if C
+			is also waiting on A, it would take 100x as long as it would to finish iterating.
+			As well, this problem gets amplified in that once A finishes, it will acquire the lock
+			on the next bucket, and this issue repeats. Hence all iterators slow to the pace
+			of the slowest iterator. This can cause B and C to take over 100ms to finish iterating,
+			when they could have finished already.
 
-	The lower 2 bits are used to denote the state of the bucket itself, while the higher
-	bits are used to hold the address of the 'g' which currently holds the lock. This
-	information (the 'g' that holds it) is used for debugging purposes, and as well
-	can be used for optimizations (I.E, used to determine if the current lock holder
-	is running on the same 'm', the OS Thread, as us, and hence we should immediately yield,
-	or if the current Goroutine is running, upon which we should immediately backoff.
-	Lastly, if the lock holder has changed while we were spinning and whether or not
-	we should reset any variables used to control spinning behavior.)
+		Now, one way to reduce the effects of convoying is to randomize our start position when we
+		traverse down to the next depth. Hence, lets say that the convoying from A, B, and C occurred,
+		we would be bounded in how bad convoying is in that A, B, and C are bound to go different ways and
+		less likely to convoy up again.
 
-	A 'bucket' contains the same base fields as the an intermediate header type, referred
-	to as 'bucketHdr', and of which can be used to determine the actual bucket type.
+		As well, we truly eliminate any and all convoying by keeping track of all locked buckets
+		as 'busy' and poll on all of them later. This way, even if A is processing a bucket that B
+		and C want, they will skip that until the end; hopefully after it finishes, it will already
+		have been released. Even if it is not, when we poll on the skipped over buckets, we're
+		always doing work. In experiments ran, we found that even under high contention,
+		iteration always seemed to scale very well in that any locked buckets are skipped over,
+		hence providing scalability.
 
-	If more than 8 data slots within a bucket are filled and if the operation is
-	either an insert or a request to 'interlock' (discussed further in this document)
-	we must 'resize' to allow for more. The method used to resize is rather unique
-	in that only the bucket itself will be redistributed (discussed further in this
-	document). If a bucket's data slots is ever empty, which may only result from
-	a recent removal operation, that bucket will be deallocated to offer a means to
-	shrink used space.
+	7. Interlocked Access
+
+		When we say 'interlocked' we mean that the bucket is currently locked for longer than
+		a single operation. Normal operations, such as insert, lookup, and removal are merely
+		atomic operations. However, iteration and user-specified 'sync.Interlocked' request
+		to a key is referred to as 'interlocked'. In this mode, the user may only access that
+		key, and any attempts to access other keys will result in a panic. While the user has
+		interlocked access to an element, they are the only ones with access to it (this also
+		applies to iteration, as only you have access to that bucket). This invariant is very
+		necessary to prevent deadlock, as we may only remain deadlock free while we may only
+		hold one lock at any given time.
+
+		This invariant gives way to an extremely crucial optimization, wherein the current
+		locked bucket is cached and can be obtained instantly, which also GREATLY contributes to
+		it's scalability.
+
+	8. The 'live pointer' problem
+
+		The function 'mapaccess' returns a live pointer to the element itself, and is normally
+		protected by a mutex, and hence the time wherein it copies into the user requested storage
+		is normally safe. However, with a concurrent map, this becomes an issue wherein once we release
+		the current lock, another mutator could come in and modify the returned value before it
+		finishes it's copy, resulting in undefined behavior. This means that the lock must not
+		be released until after it's copy finished... however, this is not possible from the perspective
+		from the runtime itself. Hence, a call to 'maprelease' is generated after it's copy is finished
+		to release the spinlock held.
 */
 
 import (
