@@ -1,5 +1,152 @@
 package runtime
 
+/*
+	1. Background information
+
+		This file contains the implementation of a concurrent extension for Go's map type.
+
+		This is a novel lock-based implementation of a hash table. Similar to Go's default
+		builtin hash table (see runtime/hashmap.go), data is arranged into an array of
+		buckets, wherein each bucket contains up to 8 key/value pairs. As well, we use the
+		most significant byte (8-bits) of the hashto distinguish each entry in a bucket.
+		If the hash is EMPTY, it signifies that the entry is valid. Further in this
+		documentation, a pair of hash/key/value will be referred to as 'data slots',
+		and should not be confused with pointer-sized word-aligned memory.
+
+	2. Types
+
+		Unlike the default builtin hash table, we have three distinct types, with their own
+		unique specific purposes.
+
+		A. bucketHdr
+
+			The descriptor for a bucket, of which can safely be casted to and from the respective
+			type it describes. For example, this can be casted to bucketData or bucketArray, and
+			bucketData or bucketArray can be casted to a bucketHdr respectively. This plays a
+			crucial role in that it allows us to have a collection of intermediate types
+			which actually describe what it's body holds. It's significance will be outlined
+			further below. Should be emphasized: both bucketData and bucketArray contain the
+			same fields as this type, as they are castable.
+
+			It holds a Test-and-Test-and-Set spinlock which not only supplies mutual exclusion,
+			but as well describes the 'state' and 'type' of the bucket. As well, it contains
+			a context-based counter (explained below) as well as functions as linked list where
+			it it holds a reference to it's parent and it's position inside of it's parent
+			(of which it's significance is explained later).
+
+		B. bucketData
+
+			The actual data itself: contains 8 data slots of which store data for the user.
+			This type of bucket REQUIRES that the spinlock be obtained before attempting to
+			access it's data slots. The values it's spinlock will ALWAYS contain are listed
+			below...
+
+			It's 'count' is used to determine how many data slots are filled.
+
+			Spinlock Values: LOCKED | UNLOCKED
+
+		C. bucketArray
+
+			An array of buckets; it is used to maintain the number of buckets at this depth.
+			Beginning at the root (depth = 0), the number of buckets stored by any given depth N,
+			is (DEFAULT_BUCKETS * (N+1)). Hence, if DEFAULT_BUCKETS = 32, at the root (depth = 0),
+			it will have 32 buckets, at depth = 1, we have 64 buckets, and so on and so forth.
+
+			It's 'count' is used to determine how many buckets are allocated (and hence hold
+			data). For reference: A bucket is originally 'nil' to signify that it holds no data.
+
+			Spinlock Values: ARRAY
+
+
+	3. Spinlock
+
+		The Test-and-Test-and-Set Spinlock is used to not only provide mutual exclusion, but
+		as well to act as a kind of descriptor for the bucket that it belongs to. If the higher
+		bits ~(0x2) are set, it signifies that it is a locked bucketData (as only bucketData require
+		a lock). As well, if any of the higher bits are set, the lower order bits (0x2) MUST be 0.
+
+		If the lower order bits are set, then they can mean one of 3 things...
+
+		00:
+			Unlocked bucketData
+		01:
+			bucketArray
+		10:
+			INVALID
+
+		If a spinlock's state describes the bucket as 'INVALID', then it signifies that it
+		has changed and the any current waiting Goroutines must 'refresh' their bucket.
+		Refreshing is done by doing using the bucket's backlink to it's parent and reloading
+		updating it's current reference with what is there currently. This only occurs during
+		resizing and deletion, both described further on.
+
+		Note as well, a bucketArray, does not need to be acquired, and so any nested bucketArray
+		can be traversed by any number of Goroutines; chceking is as cheap as an atomic load.
+
+	4. Resizing
+
+		The map takes a more unique approach on the issue of growth. Instead of the conventional
+		means of locking all buckets within a bucketArray in a top down approach to rehash every
+		element, instead we merely create a new bucketArray, rehash the elements inside of the
+		full bucketData into that new bucketArray, and then update the parent's reference
+		to point to the new one. We also set the INVALID bit for the spinlock notifying that
+		all waiters must refresh the bucket they are working on. As well, this new
+		bucketArray is twice the size of the previous, and uses a different unique seed to
+		prevent any excess collision and possible contention for elements that hash to the same
+		element.
+
+		In addition, not only do you have extremely low collision of elements (given a
+		depth of N, two keys can only collide to the same bucket if they happen
+		to hash to the same bucket N times with a different seed and modulo), they also
+		provide extremely low contention (as keys are far less likely to hash to the same
+		bucket, as described above).
+
+	5. Deletion and 'Shrinking'
+
+		While the map does not necessarily shrink, it does provide a means to keep space
+		usage down. bucketArray are never deleted, but bucketData can be. Once a bucketData
+		is empty, it will be also be removed. In an experiment, filling up the map with
+		10 million elements (8-byte key/value pairs) took up about 2.1GBs of memory, but
+		deleting all 10 Million shrank to around 500MBs. While, again, it is not a means
+		to shrink, it is rather adequate.
+
+	6. Iteration
+
+		Iteration is an extremely important feature of a data structure, of which not all
+		lock-free algorithms provide, and most lock-based algorithms fail to do justice for.
+		Iteration has one 'invariant' which may be a bit inconvenient, but at the same time
+		provides high-scalability and allows concurrent (and parallel) mutations to occur
+		while doing so. While iterating, you are in a mode referred to as 'interlocked access',
+		which will be described in detail later.
+
+	Each bucket contains as Test-and-Test-and-Set Spinlock implementation, which provides
+	mutual exclusion to each bucket. Before any Goroutine may access or mutate the data slots
+	of which that bucket holds, they must acquire it's spinlock. The spinlock itself
+	not only provides mutual exclusion, but as well describes it's state.
+
+	NOTE: This section is liable to change, and most likely will.
+
+	The lower 2 bits are used to denote the state of the bucket itself, while the higher
+	bits are used to hold the address of the 'g' which currently holds the lock. This
+	information (the 'g' that holds it) is used for debugging purposes, and as well
+	can be used for optimizations (I.E, used to determine if the current lock holder
+	is running on the same 'm', the OS Thread, as us, and hence we should immediately yield,
+	or if the current Goroutine is running, upon which we should immediately backoff.
+	Lastly, if the lock holder has changed while we were spinning and whether or not
+	we should reset any variables used to control spinning behavior.)
+
+	A 'bucket' contains the same base fields as the an intermediate header type, referred
+	to as 'bucketHdr', and of which can be used to determine the actual bucket type.
+
+	If more than 8 data slots within a bucket are filled and if the operation is
+	either an insert or a request to 'interlock' (discussed further in this document)
+	we must 'resize' to allow for more. The method used to resize is rather unique
+	in that only the bucket itself will be redistributed (discussed further in this
+	document). If a bucket's data slots is ever empty, which may only result from
+	a recent removal operation, that bucket will be deallocated to offer a means to
+	shrink used space.
+*/
+
 import (
 	"runtime/internal/atomic"
 	"runtime/internal/sys"
