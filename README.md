@@ -34,15 +34,15 @@ The most sane semantic that SHOULD be offered is the mutual exclusion of element
 as an increment (as basic of a Read-Modify-Write operation as you can get) are 3 distinct operations, two of which access the map. This is provided through the
 `sync.Interlocked(map, key)` function.
 
-- [x] Single Key Mutual Access
-- [ ] Multi Key Mutual Access
+- [x] Single Key Exclusive Access
+- [ ] Multi Key Exclusive Access
 
 Note:
 
-Multi Key Mutual Access CAN be supported, but due to time constraints, it will not be implemented in time. To support this, we must extend the above mentioned function
+Multi Key Exclusive Access CAN be supported, but due to time constraints, it will not be implemented in time. To support this, we must extend the above mentioned function
 to be variadic, (e.g., `sync.Interlocked(map, key...)`). From here, we may provide a global locking order of which all concurrent multi key mutual access must adhere to
 to prevent deadlock. The currently planned implementation is to order each key by the position they hash to, and acquire them (recursively) in that order.
-(e.g, Order by hash(key) % size and do this for whatever keys hash to the same bucket recursively).
+(e.g, Order by `hash(key) % size` and do this for whatever keys hash to the same nested `bucketArray` recursively, until you find the `bucketData` they correspond to).
 
 ### Nicety
 
@@ -61,14 +61,14 @@ a very simple fix, I don't feel up to it.
 
 ### Creation
 
-How does one create the concurrent map? 'make' has been modified to accept a third argument
+How does one create the concurrent map? `make` has been modified to accept a third argument
 for creating a map. Previously, the first argument declared the type of the map, and the
 second argument was a hint to the runtime for how many buckets it should prepare in advance.
 
-Now there is a third argument, which is the 'concurrency level', wherein this is the number of
-Goroutines that are expected to navigate the map. Just like how 'make' normally works, if the
-second or third arguments are left out, they are replaced with '0' in the compiler. If 'concurrency level'
-is '0', then it will create a normal hashmap. If concurrency > 0, then it will create an concurrent map.
+Now there is a third argument, which is the `concurrency level`, wherein this is the number of
+Goroutines that are expected to navigate the map. Just like how `make` normally works, if the
+second or third arguments are left out, they are replaced with `0` in the compiler. If `concurrency level`
+is `0`, then it will create a normal map. If `concurrency level > 0`, then it will create an concurrent map.
 
 ```go
 cmap := make(map[int]int, NUM_ELEMS, NUM_CONCURRENCY)
@@ -76,7 +76,7 @@ cmap := make(map[int]int, NUM_ELEMS, NUM_CONCURRENCY)
 
 ### Compatibility
 
-The way Go works is that a hash map, I.E `map[int]int`, it's type is managed by the compiler, and
+The way Go works is that a map, I.E `map[int]int`, has its type managed by the compiler, and
 the actual object itself is just the header for the map. This header is opaque enough that we can modify
 it without effecting the user's code, and hence the concurrent map can be used wherever the normal hash map can be.
 
