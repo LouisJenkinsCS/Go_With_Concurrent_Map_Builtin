@@ -16,6 +16,8 @@ I have been granted two prestiguous awards from this project (one directly, one 
 
 **Honorable Mention for Outstanding Undergraduate Researcher** for 2017 from the Computing Research Association's commitee sponsored by Microsoft Research, [link](http://cra.org/about/awards/outstanding-undergraduate-researcher-award/)
 
+**School Article on Peer's Choice for Outstanding Project** for Bloomsburg University, seen [here](http://bloomsburgu.tumblr.com/post/150972457332/louis-jenkinss-internship-with-lehigh) 
+
 ## Why
 
 This fork of the Go programming language solves a problem which the developers seek to ignore. Whether it be from laziness, a design decision, or it being deemed an impossibilty,
