@@ -1,5 +1,21 @@
 # Concurrent Map Built-in for the Go Programming Language
 
+## Highlights of Project
+
+In case you're someone perusing my profile and stumbled upon this repository, here are the 'highlights' of the project.
+
+[Concurrent Map Implementation](https://github.com/LouisJenkinsCS/Go_With_Concurrent_Map_Builtin/blob/master/src/runtime/concurrent_map.go)
+
+[Comparison between fork and official](https://github.com/golang/go/compare/master...LouisJenkinsCS:master)
+
+## Awards
+
+I have been granted two prestiguous awards from this project (one directly, one the main contribution). 
+
+**Peer's Choice for Outstanding Project** at Lehigh University's N.S.F-Sponsored R.E.U "Smart Spaces"
+
+**Honorable Mention for Outstanding Undergraduate Researcher** for 2017 from the Computing Research Association's commitee sponsored by Microsoft Research, [link](http://cra.org/about/awards/outstanding-undergraduate-researcher-award/)
+
 ## Why
 
 This fork of the Go programming language solves a problem which the developers seek to ignore. Whether it be from laziness, a design decision, or it being deemed an impossibilty,
@@ -282,11 +298,3 @@ can freely do all of these operations safely.
 #### Read-Write Iteration
 
 ![Combined Read-Write](screenshots/combinedRW.png)
-
-## Awards
-
-I have been granted two prestiguous awards from this project (one directly, one the main contribution). 
-
-**Peer's Choice for Outstanding Project** at Lehigh University's N.S.F-Sponsored R.E.U "Smart Spaces"
-
-**Honorable Mention for Outstanding Undergraduate Researcher** for 2017 from the Computing Research Association's commitee sponsored by Microsoft Research, [link](http://cra.org/about/awards/outstanding-undergraduate-researcher-award/)
