@@ -12,11 +12,9 @@ In case you're someone perusing my profile and stumbled upon this repository, he
 
 I have been granted two prestiguous awards from this project (one directly, one the main contribution). 
 
-**Peer's Choice for Outstanding Project** at Lehigh University's N.S.F-Sponsored R.E.U "Smart Spaces"
+**Peer's Choice for Outstanding Project** at Lehigh University's N.S.F-Sponsored R.E.U "Smart Spaces", school article [here](http://bloomsburgu.tumblr.com/post/150972457332/louis-jenkinss-internship-with-lehigh), official website down.
 
 **Honorable Mention for Outstanding Undergraduate Researcher** for 2017 from the Computing Research Association's commitee sponsored by Microsoft Research, [link](http://cra.org/about/awards/outstanding-undergraduate-researcher-award/)
-
-**School Article on Peer's Choice for Outstanding Project** for Bloomsburg University, seen [here](http://bloomsburgu.tumblr.com/post/150972457332/louis-jenkinss-internship-with-lehigh) 
 
 ## Why
 
